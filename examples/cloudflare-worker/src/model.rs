@@ -1,3 +1,4 @@
+use comet::nebula::{Column, ColumnDef, Entity, SqlType, TableDef};
 use rocket::serde::{Deserialize, Serialize};
 
 /// A task as returned to API clients.
@@ -22,6 +23,55 @@ pub struct TaskRow {
     pub title: String,
     pub done: i32,
     pub created_at: String,
+}
+
+impl TaskRow {
+    pub const ID: Column<i32> = Column::new("tasks", "id");
+    pub const TITLE: Column<String> = Column::new("tasks", "title");
+    pub const DONE: Column<i32> = Column::new("tasks", "done");
+    pub const CREATED_AT: Column<String> = Column::new("tasks", "created_at");
+}
+
+const TASK_ROW_COLUMNS: &[ColumnDef] = &[
+    ColumnDef {
+        name: "id",
+        sql_type: SqlType::Integer,
+        nullable: false,
+        primary_key: true,
+        auto_increment: true,
+        unique: true,
+        indexed: true,
+        default_sql: None,
+    },
+    ColumnDef::new("title", SqlType::Text),
+    ColumnDef {
+        name: "done",
+        sql_type: SqlType::Boolean,
+        nullable: false,
+        primary_key: false,
+        auto_increment: false,
+        unique: false,
+        indexed: false,
+        default_sql: Some("0"),
+    },
+    ColumnDef {
+        name: "created_at",
+        sql_type: SqlType::Text,
+        nullable: false,
+        primary_key: false,
+        auto_increment: false,
+        unique: false,
+        indexed: false,
+        default_sql: Some("datetime('now')"),
+    },
+];
+
+impl Entity for TaskRow {
+    const TABLE: TableDef = TableDef {
+        name: "tasks",
+        columns: TASK_ROW_COLUMNS,
+        indexes: &[],
+    };
 }
 
 impl From<TaskRow> for Task {

@@ -1,24 +1,19 @@
 use comet::cloudflare::{
     BindingName, D1, QueueBinding, R2Bucket, R2Object, WebSocketResponse, WebSocketUpgrade,
 };
+use comet::nebula::Entity;
 use rocket::data::Capped;
 use rocket::futures::StreamExt;
 use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::{Build, Rocket};
 use std::path::PathBuf;
-use wasm_bindgen::JsValue;
 use worker::{Context, Env, WebsocketEvent};
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{NewTask, Task, TaskEvent, TaskEventKind, TaskRow};
 
-const TASKS_QUERY: &str = "SELECT id, title, done, created_at FROM tasks ORDER BY id";
-const TASK_BY_ID_QUERY: &str = "SELECT id, title, done, created_at FROM tasks WHERE id = ?1";
-const INSERT_TASK_QUERY: &str =
-    "INSERT INTO tasks (title) VALUES (?1) RETURNING id, title, done, created_at";
-const COMPLETE_TASK_QUERY: &str =
-    "UPDATE tasks SET done = 1 WHERE id = ?1 RETURNING id, title, done, created_at";
+const TASK_COLUMNS: &[&str] = &["id", "title", "done", "created_at"];
 
 pub struct DB;
 
@@ -127,9 +122,10 @@ fn asset_key(key: PathBuf) -> String {
 
 #[get("/tasks")]
 pub async fn list_tasks(db: D1<DB>) -> ApiResult<Json<Vec<Task>>> {
-    let rows = db
-        .prepare(TASKS_QUERY)
-        .all()
+    let rows = TaskRow::select()
+        .order_by(TaskRow::ID.asc())
+        .to_statement()
+        .fetch_all_d1(&db)
         .await
         .map_err(ApiError::from)?
         .results::<TaskRow>()
@@ -140,11 +136,10 @@ pub async fn list_tasks(db: D1<DB>) -> ApiResult<Json<Vec<Task>>> {
 
 #[get("/tasks/<id>")]
 pub async fn get_task(id: i32, db: D1<DB>) -> ApiResult<Json<Task>> {
-    let row = db
-        .prepare(TASK_BY_ID_QUERY)
-        .bind(&[JsValue::from(id)])
-        .map_err(ApiError::from)?
-        .first::<TaskRow>(None)
+    let row = TaskRow::select()
+        .where_(TaskRow::ID.eq(id))
+        .to_statement()
+        .fetch_optional_d1::<TaskRow>(&db)
         .await
         .map_err(ApiError::from)?
         .ok_or(ApiError::NotFound)?;
@@ -162,14 +157,13 @@ pub async fn create_task(
         .validated_title()
         .map_err(|message| ApiError::BadRequest(message.to_string()))?;
 
-    let row = db
-        .prepare(INSERT_TASK_QUERY)
-        .bind(&[JsValue::from(title)])
-        .map_err(ApiError::from)?
-        .first::<TaskRow>(None)
+    let row = TaskRow::insert()
+        .set(TaskRow::TITLE, title)
+        .returning(TASK_COLUMNS.iter().copied())
+        .to_statement()
+        .fetch_one_d1::<TaskRow>(&db)
         .await
-        .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError::BadRequest("insert did not return a row".to_string()))?;
+        .map_err(ApiError::from)?;
 
     let task: Task = row.into();
     publish_task_event(&queue, task.id, TaskEventKind::Created).await?;
@@ -183,11 +177,12 @@ pub async fn complete_task(
     db: D1<DB>,
     queue: QueueBinding<TaskEvents>,
 ) -> ApiResult<Json<Task>> {
-    let row = db
-        .prepare(COMPLETE_TASK_QUERY)
-        .bind(&[JsValue::from(id)])
-        .map_err(ApiError::from)?
-        .first::<TaskRow>(None)
+    let row = TaskRow::update()
+        .set(TaskRow::DONE, 1)
+        .where_(TaskRow::ID.eq(id))
+        .returning(TASK_COLUMNS.iter().copied())
+        .to_statement()
+        .fetch_optional_d1::<TaskRow>(&db)
         .await
         .map_err(ApiError::from)?
         .ok_or(ApiError::NotFound)?;
