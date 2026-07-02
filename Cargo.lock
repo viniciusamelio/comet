@@ -203,6 +203,7 @@ dependencies = [
  "futures-util",
  "rocket",
  "send_wrapper",
+ "serde",
  "thiserror",
  "worker",
 ]

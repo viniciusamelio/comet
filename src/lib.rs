@@ -1,5 +1,8 @@
 use std::pin::Pin;
 
+#[cfg(feature = "nebula")]
+pub mod nebula;
+
 #[cfg(feature = "native-client")]
 use rocket::http::{Header, Method};
 #[cfg(feature = "native-client")]
