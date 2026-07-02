@@ -23,8 +23,7 @@ pub enum AdapterError {
 /// A byte stream not yet fully read. `'static` and not required to be
 /// `Send`: the only producers/consumers of this today run on
 /// `wasm32-unknown-unknown` under Workers, which has no threads.
-pub type BoxedByteStream =
-    Pin<Box<dyn futures_util::Stream<Item = std::io::Result<bytes::Bytes>>>>;
+pub type BoxedByteStream = Pin<Box<dyn futures_util::Stream<Item = std::io::Result<bytes::Bytes>>>>;
 
 /// The body of a [`WorkerRequest`] or [`WorkerResponse`].
 ///
@@ -54,9 +53,7 @@ impl WorkerBody {
 impl std::fmt::Debug for WorkerBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WorkerBody::Buffered(bytes) => {
-                f.debug_tuple("Buffered").field(&bytes.len()).finish()
-            }
+            WorkerBody::Buffered(bytes) => f.debug_tuple("Buffered").field(&bytes.len()).finish(),
             WorkerBody::Streamed(_) => f.write_str("Streamed(..)"),
         }
     }
@@ -118,10 +115,20 @@ pub mod cloudflare {
     use rocket::http::uri::Origin;
     use rocket::http::{Header, Method};
     use rocket::tokio::io::AsyncReadExt;
-    use rocket::{Build, Rocket};
+    use rocket::{Build, Orbit, Rocket};
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use worker::{Error, Headers, Request, Response, Result};
 
     use crate::{AdapterError, BoxedByteStream, WorkerBody, WorkerRequest, WorkerResponse};
+
+    /// Bodies at or under this size skip the chunked-read loop entirely: one
+    /// `to_bytes()` call replaces a 64KiB scratch-buffer allocation plus a
+    /// `read()` loop that, for a typical small API response, would only ever
+    /// run once anyway. Chosen to match Rocket's own default `Limits::STRING`
+    /// (8KiB) — a reasonable proxy for "ordinary small response", not a hard
+    /// correctness boundary.
+    const SMALL_BODY_THRESHOLD: usize = 8 * 1024;
 
     pub trait Application {
         fn dispatch(self, request: WorkerRequest) -> DispatchFuture;
@@ -185,57 +192,125 @@ pub mod cloudflare {
         response_to_worker(response)
     }
 
+    thread_local! {
+        // wasm32 under Workers is single-threaded, so a thread-local is
+        // effectively a per-isolate cache: it survives across `#[event(fetch)]`
+        // invocations that land on an isolate the runtime chose to reuse, and
+        // starts fresh (`None`) on a new isolate. `Rc`, not `Arc`: no atomics
+        // needed for the same reason.
+        static ORBIT: RefCell<Option<Rc<Rocket<Orbit>>>> = const { RefCell::new(None) };
+    }
+
+    /// Like [`serve()`], but ignites `build_rocket()` — running route
+    /// mounting, sentinel checks, and liftoff fairings — at most once per
+    /// isolate, reusing the resulting `Rocket<Orbit>` across every request
+    /// that lands on that isolate afterward.
+    ///
+    /// Workers isolates are commonly reused across many requests specifically
+    /// so expensive per-isolate setup doesn't have to repeat; `serve()`
+    /// ignites fresh on every single call regardless, throwing that away.
+    /// `dispatch_external()` takes `&self` — Rocket is already designed to
+    /// serve arbitrarily many requests from one `Rocket<Orbit>` — so reusing
+    /// it here isn't a workaround, it's the intended usage the `Application`
+    /// trait's per-request ignition was accidentally not taking advantage of.
+    ///
+    /// `build_rocket` is only called on a cache miss (this isolate's first
+    /// request, or after an eviction), so mounting routes is skipped too, not
+    /// just ignition. It's a `FnOnce`, so it's fine for it to move in
+    /// request-scoped things like `Env` — they're simply unused when cached.
+    ///
+    /// This assumes bindings (`Env`) are stable for the isolate's lifetime,
+    /// which they are: Cloudflare rolls out binding/config changes as new
+    /// isolates, never by mutating a running one.
+    pub async fn serve_cached<F>(mut req: Request, build_rocket: F) -> Result<Response>
+    where
+        F: FnOnce() -> Rocket<Build>,
+    {
+        let request = request_from_worker(&mut req).await?;
+
+        let cached = ORBIT.with(|cache| cache.borrow().clone());
+        let rocket = match cached {
+            Some(rocket) => rocket,
+            None => {
+                let rocket = Rc::new(
+                    build_rocket()
+                        .orbit_external()
+                        .await
+                        .map_err(to_worker_error)?,
+                );
+                ORBIT.with(|cache| *cache.borrow_mut() = Some(rocket.clone()));
+                rocket
+            }
+        };
+
+        let response = dispatch_on_orbit(rocket, request).await?;
+        response_to_worker(response)
+    }
+
     impl Application for Rocket<Build> {
         fn dispatch(self, request: WorkerRequest) -> DispatchFuture {
             Box::pin(async move {
-                // Rocket only knows the response status/headers once
-                // `dispatch_external()` has actually run the route handler
-                // (side effects and all) to completion, so that part can't be
-                // deferred into the body stream below. But `rocket`,
-                // `rocket_request`, and `response` all self-reference each
-                // other (`rocket_request` borrows `rocket`, `response`
-                // borrows `rocket_request`), so once dispatch is done, the
-                // *rest* of the work (reading the body incrementally) can
-                // only happen inside the same generator that holds all
-                // three — it can't be handed off to a separately-owned task.
-                // `try_stream!` builds exactly that: one self-contained,
-                // `'static` generator. It sends status/headers out over a
-                // oneshot the moment they're known (always strictly before
-                // the first body byte, or before the stream ends if the body
-                // is empty), and this function drives the stream by exactly
-                // one item to guarantee that has already happened before
-                // returning a `WorkerResponse`.
-                let (meta_tx, meta_rx) = futures_channel::oneshot::channel();
+                let rocket = Rc::new(self.orbit_external().await.map_err(to_worker_error)?);
+                dispatch_on_orbit(rocket, request).await
+            })
+        }
+    }
 
-                let mut body_stream: BoxedByteStream = Box::pin(async_stream::try_stream! {
-                    let rocket = self.orbit_external().await.map_err(to_io_error)?;
-                    let method = parse_method(&request.method).map_err(to_io_error)?;
-                    let uri = Origin::parse_owned(request.uri)
-                        .map_err(|error| to_io_error(format!("invalid URI: {error}")))?;
+    /// The shared core of [`Application for Rocket<Build>`] and
+    /// [`serve_cached()`]: dispatch a request through an already-ignited
+    /// `Rocket<Orbit>`.
+    fn dispatch_on_orbit(rocket: Rc<Rocket<Orbit>>, request: WorkerRequest) -> DispatchFuture {
+        Box::pin(async move {
+            // Rocket only knows the response status/headers once
+            // `dispatch_external()` has actually run the route handler
+            // (side effects and all) to completion, so that part can't be
+            // deferred into the body stream below. But `rocket_request` and
+            // `response` self-reference `rocket` (`rocket_request` borrows
+            // it, `response` borrows `rocket_request`), so once dispatch is
+            // done, the *rest* of the work (reading the body incrementally)
+            // can only happen inside the same generator that holds all
+            // three — it can't be handed off to a separately-owned task.
+            // `try_stream!` builds exactly that: one self-contained,
+            // `'static` generator. It sends status/headers out over a
+            // oneshot the moment they're known (always strictly before
+            // the first body byte, or before the stream ends if the body
+            // is empty), and this function drives the stream by exactly
+            // one item to guarantee that has already happened before
+            // returning a `WorkerResponse`.
+            let (meta_tx, meta_rx) = futures_channel::oneshot::channel();
 
-                    let mut rocket_request = rocket::Request::new(&rocket, method, uri, None);
-                    for (name, value) in request.headers {
-                        rocket_request.add_header(Header::new(name, value));
+            let mut body_stream: BoxedByteStream = Box::pin(async_stream::try_stream! {
+                let method = parse_method(&request.method).map_err(to_io_error)?;
+                let uri = Origin::parse_owned(request.uri)
+                    .map_err(|error| to_io_error(format!("invalid URI: {error}")))?;
+
+                let mut rocket_request = rocket::Request::new(&rocket, method, uri, None);
+                for (name, value) in request.headers {
+                    rocket_request.add_header(Header::new(name, value));
+                }
+
+                let data = match request.body {
+                    WorkerBody::Buffered(bytes) => rocket::Data::local(bytes),
+                    WorkerBody::Streamed(stream) => rocket::Data::from_stream(stream),
+                };
+
+                let mut response = rocket
+                    .dispatch_external(&mut rocket_request, data)
+                    .await;
+
+                let meta = ResponseMeta::from_response(&response);
+
+                match response.body().preset_size() {
+                    // Known-size, small: one exact-sized read beats a 64KiB
+                    // scratch buffer plus a read() loop that would only ever
+                    // run once anyway — this is the overwhelmingly common
+                    // case (typical JSON API responses, static text, ...).
+                    Some(size) if size <= SMALL_BODY_THRESHOLD => {
+                        let bytes = response.body_mut().to_bytes().await.map_err(to_io_error)?;
+                        let _ = meta_tx.send((meta, Some(bytes)));
                     }
-
-                    let data = match request.body {
-                        WorkerBody::Buffered(bytes) => rocket::Data::local(bytes),
-                        WorkerBody::Streamed(stream) => rocket::Data::from_stream(stream),
-                    };
-
-                    let mut response = rocket
-                        .dispatch_external(&mut rocket_request, data)
-                        .await;
-
-                    let status = response.status().code;
-                    let headers = response
-                        .headers()
-                        .iter()
-                        .map(|header| (header.name().to_string(), header.value().to_string()))
-                        .collect();
-                    let _ = meta_tx.send((status, headers));
-
-                    if response.body().is_some() {
+                    _ if response.body().is_some() => {
+                        let _ = meta_tx.send((meta, None));
                         let mut buf = vec![0u8; 64 * 1024];
                         loop {
                             let n = response.body_mut().read(&mut buf).await.map_err(to_io_error)?;
@@ -246,23 +321,55 @@ pub mod cloudflare {
                             yield Bytes::copy_from_slice(&buf[..n]);
                         }
                     }
+                    _ => {
+                        let _ = meta_tx.send((meta, Some(Vec::new())));
+                    }
+                }
+            });
+
+            let first_chunk = body_stream
+                .next()
+                .await
+                .transpose()
+                .map_err(to_worker_error)?;
+            let (meta, buffered_body) = meta_rx.await.map_err(|_| {
+                Error::RustError("rocket dispatch ended without producing a response".into())
+            })?;
+
+            if let Some(body) = buffered_body {
+                return Ok(WorkerResponse {
+                    status: meta.status,
+                    headers: meta.headers,
+                    body: WorkerBody::Buffered(body),
                 });
+            }
 
-                let first_chunk = body_stream.next().await.transpose().map_err(to_worker_error)?;
-                let (status, headers) = meta_rx.await.map_err(|_| {
-                    Error::RustError("rocket dispatch ended without producing a response".into())
-                })?;
+            let body: BoxedByteStream =
+                Box::pin(futures_util::stream::iter(first_chunk.map(Ok)).chain(body_stream));
 
-                let body: BoxedByteStream = Box::pin(
-                    futures_util::stream::iter(first_chunk.map(Ok)).chain(body_stream),
-                );
-
-                Ok(WorkerResponse {
-                    status,
-                    headers,
-                    body: WorkerBody::Streamed(body),
-                })
+            Ok(WorkerResponse {
+                status: meta.status,
+                headers: meta.headers,
+                body: WorkerBody::Streamed(body),
             })
+        })
+    }
+
+    struct ResponseMeta {
+        status: u16,
+        headers: Vec<(String, String)>,
+    }
+
+    impl ResponseMeta {
+        fn from_response(response: &rocket::Response<'_>) -> Self {
+            Self {
+                status: response.status().code,
+                headers: response
+                    .headers()
+                    .iter()
+                    .map(|header| (header.name().to_string(), header.value().to_string()))
+                    .collect(),
+            }
         }
     }
 
@@ -343,7 +450,8 @@ pub mod cloudflare {
 
     #[cfg(test)]
     mod tests {
-        use super::{local, local_stream};
+        use super::{Application, local, local_stream};
+        use crate::{WorkerBody, WorkerRequest};
         use futures_util::Stream;
         use std::cell::RefCell;
         use std::future::Future;
@@ -377,6 +485,16 @@ pub mod cloudflare {
         }
 
         fn assert_send<T: Send>(_: T) {}
+
+        #[rocket::get("/small")]
+        fn small() -> &'static str {
+            "ok"
+        }
+
+        #[rocket::get("/large")]
+        fn large() -> String {
+            "x".repeat(super::SMALL_BODY_THRESHOLD + 1)
+        }
 
         #[test]
         fn local_wraps_a_non_send_future_into_a_send_one() {
@@ -416,8 +534,9 @@ pub mod cloudflare {
 
         #[test]
         fn local_stream_still_yields_the_wrapped_items() {
-            let mut stream =
-                Box::pin(local_stream(NotSendStream(Rc::new(RefCell::new(vec![3, 2, 1])))));
+            let mut stream = Box::pin(local_stream(NotSendStream(Rc::new(RefCell::new(vec![
+                3, 2, 1,
+            ])))));
 
             let waker = std::task::Waker::noop();
             let mut cx = Context::from_waker(waker);
@@ -432,6 +551,28 @@ pub mod cloudflare {
             }
 
             assert_eq!(items, vec![1, 2, 3]);
+        }
+
+        #[rocket::async_test]
+        async fn dispatch_buffers_known_small_response_bodies() {
+            let app = rocket::build().mount("/", rocket::routes![small]);
+            let response = app.dispatch(WorkerRequest::get("/small")).await.unwrap();
+
+            match response.body {
+                WorkerBody::Buffered(bytes) => assert_eq!(bytes, b"ok"),
+                WorkerBody::Streamed(_) => panic!("expected small known-size body to be buffered"),
+            }
+        }
+
+        #[rocket::async_test]
+        async fn dispatch_streams_large_response_bodies() {
+            let app = rocket::build().mount("/", rocket::routes![large]);
+            let response = app.dispatch(WorkerRequest::get("/large")).await.unwrap();
+
+            match response.body {
+                WorkerBody::Buffered(_) => panic!("expected large body to remain streamed"),
+                WorkerBody::Streamed(_) => {}
+            }
         }
     }
 }

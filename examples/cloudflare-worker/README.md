@@ -9,7 +9,7 @@ It depends on `comet` with `default-features = false` and `features =
 Rocket's native local client. The Worker entrypoint calls:
 
 ```rust
-comet::cloudflare::serve(req, rocket(env)).await
+comet::cloudflare::serve_cached(req, || rocket(env)).await
 ```
 
 ## What's here
@@ -21,7 +21,7 @@ comet::cloudflare::serve(req, rocket(env)).await
 - `src/routes.rs` — Rocket routes that read and write a `tasks` table in D1
   and publish `TaskEvent`s to a queue. All D1/Queue calls are async.
 - `src/entry.rs` — the wasm-only glue: the `#[event(fetch)]` handler that
-  hands requests to Rocket via `comet::cloudflare::serve`, and the
+  hands requests to Rocket via `comet::cloudflare::serve_cached`, and the
   `#[event(queue)]` consumer that asynchronously records each `TaskEvent`
   into a `task_events` table.
 - `src/error.rs` — an `ApiError` type that turns D1/Queue failures and

@@ -26,7 +26,7 @@ fn rocket(env: Env) -> rocket::Rocket<rocket::Build> {
 
 #[event(fetch)]
 pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    comet::cloudflare::serve(req, rocket(env)).await
+    comet::cloudflare::serve_cached(req, || rocket(env)).await
 }
 ```
 

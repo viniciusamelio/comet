@@ -11,7 +11,7 @@ const RECORD_TASK_EVENT_QUERY: &str = "INSERT INTO task_events (task_id, kind) V
 pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
 
-    comet::cloudflare::serve(req, rocket(env)).await
+    comet::cloudflare::serve_cached(req, || rocket(env)).await
 }
 
 /// Consumes `TaskEvent` messages published by the API routes and records
