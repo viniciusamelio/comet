@@ -119,6 +119,10 @@ the consumer's side.
 
 ## Development
 
+See [`docs/testing.md`](docs/testing.md) for how to choose between native
+route tests, Comet adapter dispatch tests, and `wrangler dev` integration
+tests.
+
 ```sh
 cargo test --features native-client   # adapter tests, run natively
 cargo test --no-default-features --features cloudflare   # also runs natively

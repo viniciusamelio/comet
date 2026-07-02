@@ -1,1103 +1,18 @@
-diff --git a/Cargo.lock b/Cargo.lock
-index 436aa97..8945aa9 100644
---- a/Cargo.lock
-+++ b/Cargo.lock
-@@ -11,6 +11,18 @@ dependencies = [
-  "memchr",
- ]
- 
-+[[package]]
-+name = "anes"
-+version = "0.1.6"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
-+
-+[[package]]
-+name = "anstyle"
-+version = "1.0.14"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
-+
- [[package]]
- name = "async-stream"
- version = "0.3.6"
-@@ -95,6 +107,12 @@ version = "1.12.0"
- source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
- 
-+[[package]]
-+name = "cast"
-+version = "0.3.0"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
-+
- [[package]]
- name = "cc"
- version = "1.2.65"
-@@ -122,12 +140,65 @@ dependencies = [
-  "wasm-bindgen",
- ]
- 
-+[[package]]
-+name = "ciborium"
-+version = "0.2.2"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "42e69ffd6f0917f5c029256a24d0161db17cea3997d185db0d35926308770f0e"
-+dependencies = [
-+ "ciborium-io",
-+ "ciborium-ll",
-+ "serde",
-+]
-+
-+[[package]]
-+name = "ciborium-io"
-+version = "0.2.2"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "05afea1e0a06c9be33d539b876f1ce3692f4afea2cb41f740e7743225ed1c757"
-+
-+[[package]]
-+name = "ciborium-ll"
-+version = "0.2.2"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
-+dependencies = [
-+ "ciborium-io",
-+ "half",
-+]
-+
-+[[package]]
-+name = "clap"
-+version = "4.6.1"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "1ddb117e43bbf7dacf0a4190fef4d345b9bad68dfc649cb349e7d17d28428e51"
-+dependencies = [
-+ "clap_builder",
-+]
-+
-+[[package]]
-+name = "clap_builder"
-+version = "4.6.0"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "714a53001bf66416adb0e2ef5ac857140e7dc3a0c48fb28b2f10762fc4b5069f"
-+dependencies = [
-+ "anstyle",
-+ "clap_lex",
-+]
-+
-+[[package]]
-+name = "clap_lex"
-+version = "1.1.0"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
-+
- [[package]]
- name = "comet"
- version = "0.1.0"
- dependencies = [
-  "async-stream",
-  "bytes",
-+ "criterion",
-  "futures-channel",
-  "futures-util",
-  "rocket",
-@@ -147,6 +218,73 @@ dependencies = [
-  "version_check",
- ]
- 
-+[[package]]
-+name = "criterion"
-+version = "0.5.1"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "f2b12d017a929603d80db1831cd3a24082f8137ce19c69e6447f54f5fc8d692f"
-+dependencies = [
-+ "anes",
-+ "cast",
-+ "ciborium",
-+ "clap",
-+ "criterion-plot",
-+ "is-terminal",
-+ "itertools",
-+ "num-traits",
-+ "once_cell",
-+ "oorandom",
-+ "plotters",
-+ "rayon",
-+ "regex",
-+ "serde",
-+ "serde_derive",
-+ "serde_json",
-+ "tinytemplate",
-+ "walkdir",
-+]
-+
-+[[package]]
-+name = "criterion-plot"
-+version = "0.5.0"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
-+dependencies = [
-+ "cast",
-+ "itertools",
-+]
-+
-+[[package]]
-+name = "crossbeam-deque"
-+version = "0.8.6"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
-+dependencies = [
-+ "crossbeam-epoch",
-+ "crossbeam-utils",
-+]
-+
-+[[package]]
-+name = "crossbeam-epoch"
-+version = "0.9.18"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
-+dependencies = [
-+ "crossbeam-utils",
-+]
-+
-+[[package]]
-+name = "crossbeam-utils"
-+version = "0.8.21"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
-+
-+[[package]]
-+name = "crunchy"
-+version = "0.2.4"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
-+
- [[package]]
- name = "deranged"
- version = "0.5.8"
-@@ -356,6 +494,17 @@ version = "0.3.3"
- source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
- 
-+[[package]]
-+name = "half"
-+version = "2.7.1"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
-+dependencies = [
-+ "cfg-if",
-+ "crunchy",
-+ "zerocopy",
-+]
-+
- [[package]]
- name = "hashbrown"
- version = "0.17.1"
-@@ -368,6 +517,12 @@ version = "0.5.0"
- source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
- 
-+[[package]]
-+name = "hermit-abi"
-+version = "0.5.2"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
-+
- [[package]]
- name = "http"
- version = "1.4.2"
-@@ -555,6 +710,26 @@ version = "0.1.15"
- source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "c8fae54786f62fb2918dcfae3d568594e50eb9b5c25bf04371af6fe7516452fb"
- 
-+[[package]]
-+name = "is-terminal"
-+version = "0.4.17"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
-+dependencies = [
-+ "hermit-abi",
-+ "libc",
-+ "windows-sys",
-+]
-+
-+[[package]]
-+name = "itertools"
-+version = "0.10.5"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-+dependencies = [
-+ "either",
-+]
-+
- [[package]]
- name = "itoa"
- version = "1.0.18"
-@@ -696,6 +871,12 @@ version = "1.21.4"
- source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
- 
-+[[package]]
-+name = "oorandom"
-+version = "11.1.5"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
-+
- [[package]]
- name = "parking_lot"
- version = "0.12.5"
-@@ -774,6 +955,34 @@ version = "0.2.17"
- source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
- 
-+[[package]]
-+name = "plotters"
-+version = "0.3.7"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "5aeb6f403d7a4911efb1e33402027fc44f29b5bf6def3effcc22d7bb75f2b747"
-+dependencies = [
-+ "num-traits",
-+ "plotters-backend",
-+ "plotters-svg",
-+ "wasm-bindgen",
-+ "web-sys",
-+]
-+
-+[[package]]
-+name = "plotters-backend"
-+version = "0.3.7"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "df42e13c12958a16b3f7f4386b9ab1f3e7933914ecea48da7139435263a4172a"
-+
-+[[package]]
-+name = "plotters-svg"
-+version = "0.3.7"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "51bae2ac328883f7acdfea3d66a7c35751187f870bc81f94563733a154d7a670"
-+dependencies = [
-+ "plotters-backend",
-+]
-+
- [[package]]
- name = "potential_utf"
- version = "0.1.5"
-@@ -864,6 +1073,26 @@ dependencies = [
-  "getrandom",
- ]
- 
-+[[package]]
-+name = "rayon"
-+version = "1.12.0"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
-+dependencies = [
-+ "either",
-+ "rayon-core",
-+]
-+
-+[[package]]
-+name = "rayon-core"
-+version = "1.13.0"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
-+dependencies = [
-+ "crossbeam-deque",
-+ "crossbeam-utils",
-+]
-+
- [[package]]
- name = "redox_syscall"
- version = "0.5.18"
-@@ -899,6 +1128,18 @@ version = "0.1.2"
- source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "09c30c54dffee5b40af088d5d50aa3455c91a0127164b51f0215efc4cb28fb3c"
- 
-+[[package]]
-+name = "regex"
-+version = "1.12.4"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "f1292b7759ae1cb9ec195452d1390a074f0cd8541ab7a5a8c31cd6db45d4a6ba"
-+dependencies = [
-+ "aho-corasick",
-+ "memchr",
-+ "regex-automata",
-+ "regex-syntax",
-+]
-+
- [[package]]
- name = "regex-automata"
- version = "0.4.14"
-@@ -1003,6 +1244,15 @@ version = "1.0.23"
- source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
- 
-+[[package]]
-+name = "same-file"
-+version = "1.0.6"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
-+dependencies = [
-+ "winapi-util",
-+]
-+
- [[package]]
- name = "scoped-tls"
- version = "1.0.1"
-@@ -1269,6 +1519,16 @@ dependencies = [
-  "zerovec",
- ]
- 
-+[[package]]
-+name = "tinytemplate"
-+version = "1.2.1"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "be4d6b5f19ff7664e8c98d03e2139cb510db9b0a60b55f8e8709b689d939b6bc"
-+dependencies = [
-+ "serde",
-+ "serde_json",
-+]
-+
- [[package]]
- name = "tinyvec"
- version = "1.11.0"
-@@ -1482,6 +1742,16 @@ version = "0.9.5"
- source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
- 
-+[[package]]
-+name = "walkdir"
-+version = "2.5.0"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
-+dependencies = [
-+ "same-file",
-+ "winapi-util",
-+]
-+
- [[package]]
- name = "wasip2"
- version = "1.0.4+wasi-0.2.12"
-@@ -1569,6 +1839,15 @@ dependencies = [
-  "wasm-bindgen",
- ]
- 
-+[[package]]
-+name = "winapi-util"
-+version = "0.1.11"
-+source = "registry+https://github.com/rust-lang/crates.io-index"
-+checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
-+dependencies = [
-+ "windows-sys",
-+]
-+
- [[package]]
- name = "windows"
- version = "0.48.0"
-diff --git a/Cargo.toml b/Cargo.toml
-index 7f60661..804d2c4 100644
---- a/Cargo.toml
-+++ b/Cargo.toml
-@@ -19,6 +19,7 @@ cloudflare-kv = ["cloudflare"]
- cloudflare-queue = ["cloudflare", "worker/queue"]
- cloudflare-r2 = ["cloudflare"]
- cloudflare-service = ["cloudflare"]
-+cloudflare-websocket = ["cloudflare"]
- native-client = ["dep:rocket"]
- 
- [dependencies]
-@@ -30,3 +31,10 @@ async-stream = { version = "0.3", optional = true }
- futures-channel = { version = "0.3", optional = true }
- futures-util = "0.3"
- bytes = "1"
-+
-+[dev-dependencies]
-+criterion = "0.5"
-+
-+[[bench]]
-+name = "native_adapter"
-+harness = false
 diff --git a/README.md b/README.md
-index 358f387..c7c5d0b 100644
+index c7c5d0b..964a547 100644
 --- a/README.md
 +++ b/README.md
-@@ -59,9 +59,10 @@ works today:
- - R2-backed object responses via `comet::cloudflare::R2Object`, which streams
-   an object body through Rocket, preserves R2 HTTP metadata, and avoids
-   pretending that local filesystem responders work in Workers.
--- Worker WebSocket routes via `WebSocketUpgrade` and `WebSocketResponse`.
--  WebSockets still become Cloudflare `WebSocketPair` responses under the hood,
--  but applications can mount them with normal Rocket route syntax.
-+- Worker WebSocket routes via `WebSocketUpgrade` and `WebSocketResponse` when
-+  the `cloudflare-websocket` feature is enabled. WebSockets still become
-+  Cloudflare `WebSocketPair` responses under the hood, but applications can
-+  mount them with normal Rocket route syntax.
- 
- What's not there yet: full storage-backed replacements for filesystem APIs
- such as `FileServer`, `NamedFile`, and disk-backed `TempFile`. See
-@@ -113,12 +114,15 @@ the consumer's side.
-   `cloudflare-service`, `cloudflare-hyperdrive`: typed request guards for the
-   corresponding Cloudflare bindings. `cloudflare-r2` also enables the
-   `R2Object` responder.
-+- `cloudflare-websocket`: `WebSocketUpgrade`, `WebSocketResponse`, and
-+  low-level Worker WebSocket helpers. Keep it off for HTTP-only Workers.
+@@ -119,6 +119,10 @@ the consumer's side.
  
  ## Development
  
++See [`docs/testing.md`](docs/testing.md) for how to choose between native
++route tests, Comet adapter dispatch tests, and `wrangler dev` integration
++tests.
++
  ```sh
  cargo test --features native-client   # adapter tests, run natively
  cargo test --no-default-features --features cloudflare   # also runs natively
-+cargo bench --bench native_adapter   # adapter-only performance baseline
- cd examples/cloudflare-worker && npm install && npm run test && npm run test:integration
- ```
- 
-diff --git a/docs/rocket-worker-roadmap.md b/docs/rocket-worker-roadmap.md
-index c41dafe..d53dd52 100644
---- a/docs/rocket-worker-roadmap.md
-+++ b/docs/rocket-worker-roadmap.md
-@@ -244,24 +244,17 @@ Rocket's local client or server launch path.
-    route (side effects included), so they can't be produced eagerly either.
-    An earlier version of this doc proposed solving the `'static` requirement
-    with `wasm_bindgen_futures::spawn_local` + an `mpsc` channel; that turned
--   out to be unnecessary complexity. What's actually there: the whole
--   dispatch — using an already-ignited Rocket when available, building the request, running
--   `dispatch_external()`, then looping over `body_mut().read()` — is one
--   `async_stream::try_stream!` block (Rocket already depends on `async-stream`
--   for its own `response::stream` module, re-exported as `rocket::async_stream`).
--   Because it's one continuous generator, `rocket`/`rocket_request`/`response`
--   can safely self-reference each other the same way they always could inside
--   a single `async fn` body — no separate task, no channel. Status/headers are
--   sent out through a `futures_channel::oneshot` the instant they're known
--   (strictly before the first yielded byte, or before the generator ends if
--   the body is empty); `dispatch()` drives the stream exactly one item to
--   guarantee that oneshot has already fired, splices the possible first chunk
--   back onto the front with `stream::iter(..).chain(..)`, and returns a
--   `WorkerResponse` with the now-known status/headers and the remainder as a
--   `WorkerBody::Streamed`. If the response body has a known preset size at or
--   below the small-body threshold, the adapter reads it directly into
--   `WorkerBody::Buffered` instead of allocating the 64KiB streaming scratch
--   buffer.
-+   out to be unnecessary complexity. What's actually there: the adapter
-+   dispatches directly through an already-ignited Rocket when available. A
-+   small vendored Rocket lifetime fix keeps `dispatch_external()` from tying
-+   the Rocket borrow to the response lifetime more tightly than `dispatch()`
-+   itself requires. After dispatch, empty responses and bodies with a known
-+   preset size at or below the small-body threshold are read directly into
-+   `WorkerBody::Buffered`; they do not allocate the 64KiB streaming scratch
-+   buffer and do not pass through `async_stream!`, `oneshot`, or a first-poll
-+   metadata handshake. Large or unknown-size bodies keep the Rocket request
-+   pinned together with the response and cached `Rocket<Orbit>` while
-+   `body_mut().read()` yields chunks to a Worker stream.
- 
-    Streaming *responses* built with Rocket's own `response::stream` module
-    (`ByteStream!`/`TextStream!`/etc.) that await a `worker` primitive between
-@@ -298,8 +291,8 @@ Rocket's local client or server launch path.
-      incoming HTTP `Range` headers is intentionally left as follow-up API
-      design, not hidden inside the responder.
-    - Handle WebSockets with Cloudflare's Worker WebSocket APIs, not Hyper
--     upgrades. The preferred API is still a normal Rocket route:
--     `WebSocketUpgrade` validates the upgrade request and
-+     upgrades. This is opt-in via `cloudflare-websocket`. The preferred API is
-+     still a normal Rocket route: `WebSocketUpgrade` validates the upgrade request and
-      `WebSocketResponse` carries the accepted socket task back to the adapter,
-      which returns a real Worker `WebSocketPair` response. The lower-level
-      `is_websocket_upgrade()` and `websocket_response()` helpers remain
-diff --git a/examples/cloudflare-worker/Cargo.toml b/examples/cloudflare-worker/Cargo.toml
-index ebf43e8..b50f2f7 100644
---- a/examples/cloudflare-worker/Cargo.toml
-+++ b/examples/cloudflare-worker/Cargo.toml
-@@ -7,7 +7,7 @@ edition = "2021"
- crate-type = ["cdylib", "rlib"]
- 
- [dependencies]
--comet = { path = "../..", default-features = false, features = ["cloudflare", "cloudflare-d1", "cloudflare-queue", "cloudflare-r2"] }
-+comet = { path = "../..", default-features = false, features = ["cloudflare", "cloudflare-d1", "cloudflare-queue", "cloudflare-r2", "cloudflare-websocket"] }
- console_error_panic_hook = "0.1.7"
- rocket = { path = "../../vendor/rocket/core/lib", default-features = false, features = ["json", "worker"] }
- wasm-bindgen = "0.2"
-diff --git a/examples/cloudflare-worker/README.md b/examples/cloudflare-worker/README.md
-index 7a30f22..ca20fe1 100644
---- a/examples/cloudflare-worker/README.md
-+++ b/examples/cloudflare-worker/README.md
-@@ -5,10 +5,10 @@ routes through `comet`. It's a task tracker backed by D1, with task lifecycle
- changes published to a Queue and consumed asynchronously. It also exercises R2
- object streaming and a Worker WebSocket route.
- 
--It depends on `comet` with `default-features = false` and `features =
--["cloudflare", "cloudflare-d1", "cloudflare-queue", "cloudflare-r2"]`, so it
--can compile to `wasm32-unknown-unknown` without pulling Rocket's native local
--client. The Worker entrypoint calls:
-+It depends on `comet` with `default-features = false` and the Cloudflare
-+features needed by the example (`cloudflare`, D1, Queue, R2, and WebSocket), so
-+it can compile to `wasm32-unknown-unknown` without pulling Rocket's native
-+local client. The Worker entrypoint calls:
- 
- ```rust
- comet::cloudflare::fetch(req, env, ctx, rocket).await
-@@ -104,7 +104,8 @@ async fn asset(
- ### WebSocket routes
- 
- WebSockets use normal Rocket route mounting with a Worker-specific request
--guard and response type:
-+guard and response type. Enable `comet`'s `cloudflare-websocket` feature to use
-+these types:
- 
- ```rust
- #[get("/ws/echo")]
-diff --git a/patches/rocket-worker-feature.patch b/patches/rocket-worker-feature.patch
-index f04734c..ef3cfe5 100644
---- a/patches/rocket-worker-feature.patch
-+++ b/patches/rocket-worker-feature.patch
-@@ -495,9 +495,9 @@ index cf76e3b..63067bd 100644
- +    /// The caller is responsible for constructing the [`Request`] from
- +    /// transport metadata and keeping it alive for as long as the returned
- +    /// [`Response`] is used.
--+    pub async fn dispatch_external<'r>(
--+        &'r self,
--+        request: &'r mut Request<'r>,
-++    pub async fn dispatch_external<'r, 's: 'r>(
-++        &'s self,
-++        request: &'r mut Request<'s>,
- +        mut data: Data<'r>,
- +    ) -> Response<'r> {
- +        let token = self.preprocess(request, &mut data).await;
-diff --git a/src/lib.rs b/src/lib.rs
-index 13299c2..c632414 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -139,6 +139,14 @@ pub mod cloudflare {
-     }
- 
-     pub type DispatchFuture = Pin<Box<dyn Future<Output = Result<WorkerResponse>>>>;
-+
-+    struct RocketDispatchRequest {
-+        method: Method,
-+        uri: String,
-+        headers: Vec<(String, String)>,
-+        body: WorkerBody,
-+    }
-+    #[cfg(feature = "cloudflare-websocket")]
-     type WebSocketHandler =
-         Box<dyn FnOnce(worker::WebSocket) -> Pin<Box<dyn Future<Output = Result<()>>>>>;
- 
-@@ -152,10 +160,12 @@ pub mod cloudflare {
-         }
-     }
- 
-+    #[cfg(feature = "cloudflare-websocket")]
-     thread_local! {
-         static PENDING_WEBSOCKET: RefCell<Option<WebSocketHandler>> = const { RefCell::new(None) };
-     }
- 
-+    #[cfg(feature = "cloudflare-websocket")]
-     #[derive(Debug)]
-     pub enum WebSocketUpgradeError {
-         NotUpgrade,
-@@ -166,8 +176,10 @@ pub mod cloudflare {
-     /// Use this in a normal Rocket route and return [`WebSocketResponse`] from
-     /// [`WebSocketUpgrade::accept()`]. The Cloudflare adapter intercepts that
-     /// response and returns a real `worker::Response::from_websocket(...)`.
-+    #[cfg(feature = "cloudflare-websocket")]
-     pub struct WebSocketUpgrade;
- 
-+    #[cfg(feature = "cloudflare-websocket")]
-     #[rocket::async_trait]
-     impl<'r> FromRequest<'r> for WebSocketUpgrade {
-         type Error = WebSocketUpgradeError;
-@@ -186,6 +198,7 @@ pub mod cloudflare {
-         }
-     }
- 
-+    #[cfg(feature = "cloudflare-websocket")]
-     impl WebSocketUpgrade {
-         pub fn accept<H, Fut>(self, handler: H) -> WebSocketResponse
-         where
-@@ -199,10 +212,12 @@ pub mod cloudflare {
-     }
- 
-     /// Route response for a Worker WebSocket upgrade.
-+    #[cfg(feature = "cloudflare-websocket")]
-     pub struct WebSocketResponse {
-         handler: WebSocketHandler,
-     }
- 
-+    #[cfg(feature = "cloudflare-websocket")]
-     impl<'r> rocket::response::Responder<'r, 'static> for WebSocketResponse {
-         fn respond_to(self, _: &'r rocket::Request<'_>) -> rocket::response::Result<'static> {
-             PENDING_WEBSOCKET.with(|pending| {
-@@ -679,6 +694,7 @@ pub mod cloudflare {
-     /// [`WebSocketUpgrade`] and returns [`WebSocketResponse`]. This lower-level
-     /// helper remains available for applications that intentionally handle
-     /// upgrades before Rocket dispatch.
-+    #[cfg(feature = "cloudflare-websocket")]
-     pub fn is_websocket_upgrade(req: &Request) -> Result<bool> {
-         Ok(req
-             .headers()
-@@ -695,6 +711,7 @@ pub mod cloudflare {
-     /// upgrades before Rocket dispatch. The returned response owns the client
-     /// side of the pair; `handler` receives the accepted server side and can
-     /// drive `socket.events()` directly.
-+    #[cfg(feature = "cloudflare-websocket")]
-     pub fn websocket_response<H, Fut>(handler: H) -> Result<Response>
-     where
-         H: FnOnce(worker::WebSocket) -> Fut + 'static,
-@@ -703,6 +720,7 @@ pub mod cloudflare {
-         websocket_response_boxed(Box::new(|socket| Box::pin(handler(socket))))
-     }
- 
-+    #[cfg(feature = "cloudflare-websocket")]
-     fn websocket_response_boxed(handler: WebSocketHandler) -> Result<Response> {
-         let pair = worker::WebSocketPair::new()?;
-         let client = pair.client;
-@@ -833,7 +851,7 @@ pub mod cloudflare {
-     }
- 
-     pub async fn serve<A: Application>(mut req: Request, app: A) -> Result<Response> {
--        let request = request_from_worker(&mut req).await?;
-+        let request = worker_request_from_worker(&mut req).await?;
-         let response = app.dispatch(request).await?;
-         response_to_worker(response)
-     }
-@@ -935,7 +953,7 @@ pub mod cloudflare {
-     where
-         F: FnOnce() -> Rocket<Build>,
-     {
--        let request = request_from_worker(&mut req).await?;
-+        let request = rocket_request_from_worker(&mut req).await?;
- 
-         let cached = ORBIT.with(|cache| cache.borrow().clone());
-         let rocket = match cached {
-@@ -954,6 +972,7 @@ pub mod cloudflare {
- 
-         match dispatch_on_orbit(rocket, request).await? {
-             DispatchOutcome::Http(response) => response_to_worker(response),
-+            #[cfg(feature = "cloudflare-websocket")]
-             DispatchOutcome::WebSocket(handler) => websocket_response_boxed(handler),
-         }
-     }
-@@ -962,8 +981,9 @@ pub mod cloudflare {
-         fn dispatch(self, request: WorkerRequest) -> DispatchFuture {
-             Box::pin(async move {
-                 let rocket = Rc::new(self.orbit_external().await.map_err(to_worker_error)?);
--                match dispatch_on_orbit(rocket, request).await? {
-+                match dispatch_on_orbit(rocket, request.try_into()?).await? {
-                     DispatchOutcome::Http(response) => Ok(response),
-+                    #[cfg(feature = "cloudflare-websocket")]
-                     DispatchOutcome::WebSocket(_) => Err(Error::RustError(
-                         "websocket route responses require the Cloudflare fetch adapter".into(),
-                     )),
-@@ -977,117 +997,92 @@ pub mod cloudflare {
-     /// `Rocket<Orbit>`.
-     enum DispatchOutcome {
-         Http(WorkerResponse),
-+        #[cfg(feature = "cloudflare-websocket")]
-         WebSocket(WebSocketHandler),
-     }
- 
-     type OrbitDispatchFuture = Pin<Box<dyn Future<Output = Result<DispatchOutcome>>>>;
- 
--    fn dispatch_on_orbit(rocket: Rc<Rocket<Orbit>>, request: WorkerRequest) -> OrbitDispatchFuture {
--        Box::pin(async move {
--            // Rocket only knows the response status/headers once
--            // `dispatch_external()` has actually run the route handler
--            // (side effects and all) to completion, so that part can't be
--            // deferred into the body stream below. But `rocket_request` and
--            // `response` self-reference `rocket` (`rocket_request` borrows
--            // it, `response` borrows `rocket_request`), so once dispatch is
--            // done, the *rest* of the work (reading the body incrementally)
--            // can only happen inside the same generator that holds all
--            // three — it can't be handed off to a separately-owned task.
--            // `try_stream!` builds exactly that: one self-contained,
--            // `'static` generator. It sends status/headers out over a
--            // oneshot the moment they're known (always strictly before
--            // the first body byte, or before the stream ends if the body
--            // is empty), and this function drives the stream by exactly
--            // one item to guarantee that has already happened before
--            // returning a `WorkerResponse`.
--            let (meta_tx, meta_rx) = futures_channel::oneshot::channel();
--
--            let mut body_stream: BoxedByteStream = Box::pin(async_stream::try_stream! {
--                let method = parse_method(&request.method).map_err(to_io_error)?;
--                let uri = Origin::parse_owned(request.uri)
--                    .map_err(|error| to_io_error(format!("invalid URI: {error}")))?;
--
--                let mut rocket_request = rocket::Request::new(&rocket, method, uri, None);
--                for (name, value) in request.headers {
--                    rocket_request.add_header(Header::new(name, value));
--                }
-+    impl TryFrom<WorkerRequest> for RocketDispatchRequest {
-+        type Error = Error;
- 
--                let data = match request.body {
--                    WorkerBody::Buffered(bytes) => rocket::Data::local(bytes),
--                    WorkerBody::Streamed(stream) => rocket::Data::from_stream(stream),
--                };
-+        fn try_from(request: WorkerRequest) -> Result<Self> {
-+            Ok(Self {
-+                method: parse_method(&request.method).map_err(to_worker_error)?,
-+                uri: request.uri,
-+                headers: request.headers,
-+                body: request.body,
-+            })
-+        }
-+    }
- 
--                let mut response = rocket
--                    .dispatch_external(&mut rocket_request, data)
--                    .await;
--
--                if response.status() == Status::SwitchingProtocols
--                    && response.headers().get_one("x-comet-websocket-upgrade") == Some("1")
--                {
--                    let handler = PENDING_WEBSOCKET.with(|pending| pending.borrow_mut().take());
--                    match handler {
--                        Some(handler) => {
--                            let _ = meta_tx.send(InitialResponse::WebSocket(handler));
--                            return;
--                        }
--                        None => {
--                            Err(to_io_error("websocket route did not register an upgrade handler"))?;
--                        }
--                    }
--                }
-+    fn dispatch_on_orbit(
-+        rocket: Rc<Rocket<Orbit>>,
-+        request: RocketDispatchRequest,
-+    ) -> OrbitDispatchFuture {
-+        Box::pin(async move {
-+            let uri = Origin::parse_owned(request.uri)
-+                .map_err(|error| to_worker_error(format!("invalid URI: {error}")))?;
-+
-+            // Rocket's public response lifetime is tied to the request passed
-+            // to `dispatch_external()`. Keep the request pinned so any
-+            // response borrows remain stable while a streamed body is read
-+            // after this function returns.
-+            // SAFETY: `rocket` is an `Rc`, so the `Rocket<Orbit>` allocation
-+            // stays at a stable address. Any response that uses this widened
-+            // reference is either consumed before `rocket` is dropped or stored
-+            // with an `Rc` clone in `StreamedRocketResponse`.
-+            let rocket_static = unsafe { rocket_static_ref(&rocket) };
-+            let mut rocket_request = Box::pin(rocket::Request::new(
-+                rocket_static,
-+                request.method,
-+                uri,
-+                None,
-+            ));
-+            for (name, value) in request.headers {
-+                rocket_request.add_header(Header::new(name, value));
-+            }
- 
--                let meta = ResponseMeta::from_response(&response);
-+            let data = match request.body {
-+                WorkerBody::Buffered(bytes) => rocket::Data::local(bytes),
-+                WorkerBody::Streamed(stream) => rocket::Data::from_stream(stream),
-+            };
- 
--                match response.body().preset_size() {
--                    // Known-size, small: one exact-sized read beats a 64KiB
--                    // scratch buffer plus a read() loop that would only ever
--                    // run once anyway — this is the overwhelmingly common
--                    // case (typical JSON API responses, static text, ...).
--                    Some(size) if size <= SMALL_BODY_THRESHOLD => {
--                        let bytes = response.body_mut().to_bytes().await.map_err(to_io_error)?;
--                        let _ = meta_tx.send(InitialResponse::Http(meta, Some(bytes)));
--                    }
--                    _ if response.body().is_some() => {
--                        let _ = meta_tx.send(InitialResponse::Http(meta, None));
--                        let mut buf = vec![0u8; 64 * 1024];
--                        loop {
--                            let n = response.body_mut().read(&mut buf).await.map_err(to_io_error)?;
--                            if n == 0 {
--                                break;
--                            }
--
--                            yield Bytes::copy_from_slice(&buf[..n]);
--                        }
--                    }
--                    _ => {
--                        let _ = meta_tx.send(InitialResponse::Http(meta, Some(Vec::new())));
--                    }
--                }
--            });
-+            // SAFETY: the request is pinned in a `Box`; moving the box into
-+            // `StreamedRocketResponse` does not move the request allocation.
-+            // The response is dropped before the request by field order.
-+            let request_ptr = unsafe {
-+                rocket_request.as_mut().get_unchecked_mut() as *mut rocket::Request<'static>
-+            };
-+            let mut response = unsafe {
-+                rocket_static
-+                    .dispatch_external(&mut *request_ptr, data)
-+                    .await
-+            };
- 
--            let first_chunk = body_stream
--                .next()
--                .await
--                .transpose()
--                .map_err(to_worker_error)?;
--            let initial = meta_rx.await.map_err(|_| {
--                Error::RustError("rocket dispatch ended without producing a response".into())
--            })?;
--
--            let (meta, buffered_body) = match initial {
--                InitialResponse::Http(meta, buffered_body) => (meta, buffered_body),
--                InitialResponse::WebSocket(handler) => {
--                    if first_chunk.is_some() {
--                        return Err(Error::RustError(
--                            "websocket route produced an unexpected response body".into(),
--                        ));
--                    }
-+            #[cfg(feature = "cloudflare-websocket")]
-+            if response.status() == Status::SwitchingProtocols
-+                && response.headers().get_one("x-comet-websocket-upgrade") == Some("1")
-+            {
-+                let handler = PENDING_WEBSOCKET.with(|pending| pending.borrow_mut().take());
-+                return match handler {
-+                    Some(handler) => Ok(DispatchOutcome::WebSocket(handler)),
-+                    None => Err(to_worker_error(
-+                        "websocket route did not register an upgrade handler",
-+                    )),
-+                };
-+            }
- 
--                    return Ok(DispatchOutcome::WebSocket(handler));
--                }
--            };
-+            let meta = ResponseMeta::from_response(&response);
- 
--            if let Some(body) = buffered_body {
-+            if response.body().preset_size().unwrap_or(usize::MAX) <= SMALL_BODY_THRESHOLD
-+                || response.body().is_none()
-+            {
-+                let body = response
-+                    .body_mut()
-+                    .to_bytes()
-+                    .await
-+                    .map_err(to_worker_error)?;
-                 return Ok(DispatchOutcome::Http(WorkerResponse {
-                     status: meta.status,
-                     headers: meta.headers,
-@@ -1095,8 +1090,11 @@ pub mod cloudflare {
-                 }));
-             }
- 
--            let body: BoxedByteStream =
--                Box::pin(futures_util::stream::iter(first_chunk.map(Ok)).chain(body_stream));
-+            let body = stream_rocket_response(StreamedRocketResponse {
-+                response,
-+                request: rocket_request,
-+                rocket,
-+            });
- 
-             Ok(DispatchOutcome::Http(WorkerResponse {
-                 status: meta.status,
-@@ -1106,9 +1104,31 @@ pub mod cloudflare {
-         })
-     }
- 
--    enum InitialResponse {
--        Http(ResponseMeta, Option<Vec<u8>>),
--        WebSocket(WebSocketHandler),
-+    struct StreamedRocketResponse {
-+        // Drop response before request, and request before rocket.
-+        response: rocket::Response<'static>,
-+        request: Pin<Box<rocket::Request<'static>>>,
-+        rocket: Rc<Rocket<Orbit>>,
-+    }
-+
-+    fn stream_rocket_response(mut state: StreamedRocketResponse) -> BoxedByteStream {
-+        Box::pin(async_stream::try_stream! {
-+            let mut buf = vec![0u8; 64 * 1024];
-+            loop {
-+                let n = state.response.body_mut().read(&mut buf).await.map_err(to_io_error)?;
-+                if n == 0 {
-+                    break;
-+                }
-+
-+                yield Bytes::copy_from_slice(&buf[..n]);
-+            }
-+
-+            let _ = (&state.request, &state.rocket);
-+        })
-+    }
-+
-+    unsafe fn rocket_static_ref(rocket: &Rc<Rocket<Orbit>>) -> &'static Rocket<Orbit> {
-+        unsafe { &*(&**rocket as *const Rocket<Orbit>) }
-     }
- 
-     struct ResponseMeta {
-@@ -1129,7 +1149,19 @@ pub mod cloudflare {
-         }
-     }
- 
--    async fn request_from_worker(req: &mut Request) -> Result<WorkerRequest> {
-+    async fn worker_request_from_worker(req: &mut Request) -> Result<WorkerRequest> {
-+        let method = req.method().to_string();
-+        let request = rocket_request_from_worker(req).await?;
-+
-+        Ok(WorkerRequest {
-+            method,
-+            uri: request.uri,
-+            headers: request.headers,
-+            body: request.body,
-+        })
-+    }
-+
-+    async fn rocket_request_from_worker(req: &mut Request) -> Result<RocketDispatchRequest> {
-         let url = req.url()?;
-         let uri = match url.query() {
-             Some(query) => format!("{}?{}", url.path(), query),
-@@ -1148,8 +1180,8 @@ pub mod cloudflare {
-             Err(_) => WorkerBody::Buffered(Vec::new()),
-         };
- 
--        Ok(WorkerRequest {
--            method: req.method().to_string(),
-+        Ok(RocketDispatchRequest {
-+            method: parse_worker_method(req.method())?,
-             uri,
-             headers: req.headers().entries().collect(),
-             body,
-@@ -1182,17 +1214,43 @@ pub mod cloudflare {
-     }
- 
-     fn parse_method(method: &str) -> std::result::Result<Method, AdapterError> {
--        match method.to_ascii_uppercase().as_str() {
--            "GET" => Ok(Method::Get),
--            "PUT" => Ok(Method::Put),
--            "POST" => Ok(Method::Post),
--            "DELETE" => Ok(Method::Delete),
--            "HEAD" => Ok(Method::Head),
--            "OPTIONS" => Ok(Method::Options),
--            "PATCH" => Ok(Method::Patch),
--            "TRACE" => Ok(Method::Trace),
--            "CONNECT" => Ok(Method::Connect),
--            _ => Err(AdapterError::InvalidMethod(method.to_owned())),
-+        if method.eq_ignore_ascii_case("GET") {
-+            Ok(Method::Get)
-+        } else if method.eq_ignore_ascii_case("PUT") {
-+            Ok(Method::Put)
-+        } else if method.eq_ignore_ascii_case("POST") {
-+            Ok(Method::Post)
-+        } else if method.eq_ignore_ascii_case("DELETE") {
-+            Ok(Method::Delete)
-+        } else if method.eq_ignore_ascii_case("HEAD") {
-+            Ok(Method::Head)
-+        } else if method.eq_ignore_ascii_case("OPTIONS") {
-+            Ok(Method::Options)
-+        } else if method.eq_ignore_ascii_case("PATCH") {
-+            Ok(Method::Patch)
-+        } else if method.eq_ignore_ascii_case("TRACE") {
-+            Ok(Method::Trace)
-+        } else if method.eq_ignore_ascii_case("CONNECT") {
-+            Ok(Method::Connect)
-+        } else {
-+            Err(AdapterError::InvalidMethod(method.to_owned()))
-+        }
-+    }
-+
-+    fn parse_worker_method(method: worker::Method) -> Result<Method> {
-+        match method {
-+            worker::Method::Head => Ok(Method::Head),
-+            worker::Method::Get => Ok(Method::Get),
-+            worker::Method::Post => Ok(Method::Post),
-+            worker::Method::Put => Ok(Method::Put),
-+            worker::Method::Patch => Ok(Method::Patch),
-+            worker::Method::Delete => Ok(Method::Delete),
-+            worker::Method::Options => Ok(Method::Options),
-+            worker::Method::Connect => Ok(Method::Connect),
-+            worker::Method::Trace => Ok(Method::Trace),
-+            worker::Method::Report => Err(Error::RustError(
-+                "unsupported HTTP method for Rocket dispatch: REPORT".into(),
-+            )),
-         }
-     }
- 
-@@ -1259,6 +1317,11 @@ pub mod cloudflare {
-             "x".repeat(super::SMALL_BODY_THRESHOLD + 1)
-         }
- 
-+        #[rocket::get("/empty")]
-+        fn empty() -> rocket::http::Status {
-+            rocket::http::Status::NoContent
-+        }
-+
-         #[test]
-         fn local_wraps_a_non_send_future_into_a_send_one() {
-             let fut = local(async {
-@@ -1327,6 +1390,18 @@ pub mod cloudflare {
-             }
-         }
- 
-+        #[rocket::async_test]
-+        async fn dispatch_buffers_empty_response_bodies() {
-+            let app = rocket::build().mount("/", rocket::routes![empty]);
-+            let response = app.dispatch(WorkerRequest::get("/empty")).await.unwrap();
-+
-+            assert_eq!(response.status, 204);
-+            match response.body {
-+                WorkerBody::Buffered(bytes) => assert!(bytes.is_empty()),
-+                WorkerBody::Streamed(_) => panic!("expected empty body to be buffered"),
-+            }
-+        }
-+
-         #[rocket::async_test]
-         async fn dispatch_streams_large_response_bodies() {
-             let app = rocket::build().mount("/", rocket::routes![large]);
-@@ -1403,17 +1478,26 @@ impl RocketWorker {
- 
- #[cfg(feature = "native-client")]
- fn parse_method(method: &str) -> Result<Method, AdapterError> {
--    match method.to_ascii_uppercase().as_str() {
--        "GET" => Ok(Method::Get),
--        "PUT" => Ok(Method::Put),
--        "POST" => Ok(Method::Post),
--        "DELETE" => Ok(Method::Delete),
--        "HEAD" => Ok(Method::Head),
--        "OPTIONS" => Ok(Method::Options),
--        "PATCH" => Ok(Method::Patch),
--        "TRACE" => Ok(Method::Trace),
--        "CONNECT" => Ok(Method::Connect),
--        _ => Err(AdapterError::InvalidMethod(method.to_owned())),
-+    if method.eq_ignore_ascii_case("GET") {
-+        Ok(Method::Get)
-+    } else if method.eq_ignore_ascii_case("PUT") {
-+        Ok(Method::Put)
-+    } else if method.eq_ignore_ascii_case("POST") {
-+        Ok(Method::Post)
-+    } else if method.eq_ignore_ascii_case("DELETE") {
-+        Ok(Method::Delete)
-+    } else if method.eq_ignore_ascii_case("HEAD") {
-+        Ok(Method::Head)
-+    } else if method.eq_ignore_ascii_case("OPTIONS") {
-+        Ok(Method::Options)
-+    } else if method.eq_ignore_ascii_case("PATCH") {
-+        Ok(Method::Patch)
-+    } else if method.eq_ignore_ascii_case("TRACE") {
-+        Ok(Method::Trace)
-+    } else if method.eq_ignore_ascii_case("CONNECT") {
-+        Ok(Method::Connect)
-+    } else {
-+        Err(AdapterError::InvalidMethod(method.to_owned()))
-     }
- }
- 
-diff --git a/vendor/rocket/core/lib/src/lifecycle.rs b/vendor/rocket/core/lib/src/lifecycle.rs
-index 63067bd..286acbe 100644
---- a/vendor/rocket/core/lib/src/lifecycle.rs
-+++ b/vendor/rocket/core/lib/src/lifecycle.rs
-@@ -53,9 +53,9 @@ impl Rocket<Orbit> {
-     /// The caller is responsible for constructing the [`Request`] from
-     /// transport metadata and keeping it alive for as long as the returned
-     /// [`Response`] is used.
--    pub async fn dispatch_external<'r>(
--        &'r self,
--        request: &'r mut Request<'r>,
-+    pub async fn dispatch_external<'r, 's: 'r>(
-+        &'s self,
-+        request: &'r mut Request<'s>,
-         mut data: Data<'r>,
-     ) -> Response<'r> {
-         let token = self.preprocess(request, &mut data).await;
 diff --git a/benches/native_adapter.rs b/benches/native_adapter.rs
 new file mode 100644
 index 0000000..e504cb1
@@ -1402,3 +317,157 @@ index 0000000..211f70e
 +  --manifest-path vendor/rocket/core/lib/Cargo.toml \
 +  --target wasm32-unknown-unknown --no-default-features --features worker
 +```
+diff --git a/docs/testing.md b/docs/testing.md
+new file mode 100644
+index 0000000..097fca7
+--- /dev/null
++++ b/docs/testing.md
+@@ -0,0 +1,148 @@
++# Testing Comet Apps
++
++Comet supports three practical testing layers. Use the cheapest layer that
++exercises the behavior you care about, then keep a smaller number of
++`wrangler dev` tests for Worker-only behavior.
++
++## Native Request/Response Tests
++
++Use `RocketWorker` when you want fast native tests for normal Rocket routes,
++status codes, headers, JSON guards/responders, and buffered request/response
++bodies.
++
++`RocketWorker` is available through the `native-client` feature, which is
++enabled by default. It dispatches `WorkerRequest` values through Rocket's local
++async client and returns `WorkerResponse` values.
++
++```rust
++use comet::{RocketWorker, WorkerRequest};
++
++#[rocket::async_test]
++async fn get_index() {
++    let app = my_app::rocket();
++    let worker = RocketWorker::new(app).await.unwrap();
++
++    let response = worker.dispatch(WorkerRequest::get("/")).await.unwrap();
++
++    assert_eq!(response.status, 200);
++    assert_eq!(response.body.into_bytes().unwrap(), b"hello");
++}
++```
++
++For request bodies and headers:
++
++```rust
++use comet::{RocketWorker, WorkerRequest};
++
++#[rocket::async_test]
++async fn post_json() {
++    let app = my_app::rocket();
++    let worker = RocketWorker::new(app).await.unwrap();
++
++    let response = worker
++        .dispatch(
++            WorkerRequest::post("/echo", br#"{ "value": "ok" }"#.to_vec())
++                .header("content-type", "application/json"),
++        )
++        .await
++        .unwrap();
++
++    assert_eq!(response.status, 200);
++}
++```
++
++Run these tests with:
++
++```sh
++cargo test --features native-client
++```
++
++Nuances:
++
++- This path is intentionally buffered. It is not a streaming test.
++- It does not create a `worker::Env`, `worker::Context`, D1 database, R2
++  bucket, Queue, KV namespace, service binding, Hyperdrive binding, or
++  WebSocket pair.
++- It is the best default for pure route behavior because failures are normal
++  Rust test failures and do not require a wasm build or `wrangler`.
++
++## Cloudflare Adapter Dispatch Tests
++
++Use the `cloudflare::Application` trait when you want to exercise Comet's
++Cloudflare dispatch path natively without starting `wrangler dev`.
++
++```rust
++use comet::cloudflare::Application;
++use comet::{WorkerBody, WorkerRequest};
++
++#[rocket::async_test]
++async fn dispatches_through_cloudflare_adapter() {
++    let app = my_app::rocket();
++
++    let response = app.dispatch(WorkerRequest::get("/")).await.unwrap();
++
++    assert_eq!(response.status, 200);
++    assert!(matches!(response.body, WorkerBody::Buffered(_)));
++}
++```
++
++Run these tests with the Cloudflare feature set your app needs:
++
++```sh
++cargo test --no-default-features --features cloudflare
++```
++
++Nuances:
++
++- This path uses Comet's `Application for Rocket<Build>` implementation, so it
++  exercises the external Rocket dispatch adapter.
++- It still does not provide real Worker bindings. Routes that require D1, R2,
++  Queue, KV, service bindings, Hyperdrive, or real WebSockets should be covered
++  by integration tests.
++- Large or unknown-size responses may be returned as `WorkerBody::Streamed`.
++  Tests that need to assert the body bytes should either use a small known-size
++  responder or explicitly consume the stream.
++
++## Worker Integration Tests
++
++Use `wrangler dev` tests for behavior that only exists in the Worker runtime:
++
++- D1 queries and migrations
++- R2 object upload/download
++- Queue producers and consumers
++- KV, service binding, and Hyperdrive integration
++- WebSocket upgrade behavior
++- request/response streaming behavior through `worker::Request` and
++  `worker::Response`
++- wasm build and Worker compatibility
++
++The example app includes shell-driven integration tests:
++
++```sh
++cd examples/cloudflare-worker
++npm install
++npm run test:integration
++```
++
++The same example has a performance smoke test:
++
++```sh
++npm run test:perf
++```
++
++Nuances:
++
++- Do not run integration and performance tests in parallel against the same
++  example directory. Both reset local D1 state.
++- These tests are slower and require the Worker toolchain, but they are the
++  only layer that proves bindings and runtime-specific behavior end to end.
++- Keep route-level unit tests native where possible, and reserve `wrangler dev`
++  for the cases above.
++
++## Suggested Test Split
++
++- Pure route logic: `RocketWorker`.
++- Comet adapter behavior: `cloudflare::Application::dispatch`.
++- Binding/runtime behavior: `wrangler dev`.
++- Serialization, validation, and domain logic: ordinary Rust unit tests that
++  do not start Rocket at all.
