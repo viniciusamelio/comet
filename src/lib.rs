@@ -840,8 +840,9 @@ pub mod cloudflare {
 
     /// A reusable Cloudflare Worker fetch adapter backed by Rocket.
     ///
-    /// Store this in a `static` and call [`WorkerFetchApp::fetch()`] from the
-    /// `#[event(fetch)]` handler:
+    /// Most applications can call [`fetch()`] directly instead. Use this type
+    /// when you intentionally want to name the adapter object, for example in a
+    /// `static`:
     ///
     /// ```ignore
     /// static ROCKET: comet::cloudflare::FetchApp =
@@ -876,6 +877,28 @@ pub mod cloudflare {
         pub async fn fetch(&self, req: Request, env: Env, ctx: Context) -> Result<Response> {
             serve_cached(req, || (self.build_rocket)(env, ctx)).await
         }
+    }
+
+    /// Dispatches a Cloudflare Worker fetch event through a cached Rocket app.
+    ///
+    /// This is the zero-static entrypoint for applications that do not need to
+    /// name their adapter object:
+    ///
+    /// ```ignore
+    /// #[event(fetch)]
+    /// async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
+    ///     comet::cloudflare::fetch(req, env, ctx, rocket).await
+    /// }
+    /// ```
+    ///
+    /// Like [`WorkerFetchApp::fetch()`], this still caches the ignited
+    /// `Rocket<Orbit>` per Worker isolate; `build_rocket` is only called on a
+    /// cache miss.
+    pub async fn fetch<F>(req: Request, env: Env, ctx: Context, build_rocket: F) -> Result<Response>
+    where
+        F: FnOnce(Env, Context) -> Rocket<Build>,
+    {
+        serve_cached(req, || build_rocket(env, ctx)).await
     }
 
     thread_local! {

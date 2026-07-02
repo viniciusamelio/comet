@@ -11,7 +11,7 @@ can compile to `wasm32-unknown-unknown` without pulling Rocket's native local
 client. The Worker entrypoint calls:
 
 ```rust
-ROCKET.fetch(req, env, ctx).await
+comet::cloudflare::fetch(req, env, ctx, rocket).await
 ```
 
 ## What's here
@@ -119,7 +119,7 @@ async fn websocket_echo(
 ```
 
 The Worker entrypoint does not need a path-specific upgrade branch; it keeps
-calling `ROCKET.fetch(req, env, ctx).await`.
+calling `comet::cloudflare::fetch(req, env, ctx, rocket).await`.
 
 ## Setup
 

@@ -8,7 +8,7 @@ use rocket::serde::json::Json;
 use rocket::{Build, Rocket};
 use std::path::PathBuf;
 use wasm_bindgen::JsValue;
-use worker::{Env, WebsocketEvent};
+use worker::{Context, Env, WebsocketEvent};
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{NewTask, Task, TaskEvent, TaskEventKind, TaskRow};
@@ -198,7 +198,7 @@ pub async fn complete_task(
     Ok(Json(task))
 }
 
-pub fn rocket(env: Env) -> Rocket<Build> {
+pub fn rocket(env: Env, _ctx: Context) -> Rocket<Build> {
     use rocket::data::{Limits, ToByteUnit};
 
     let limits = Limits::default()

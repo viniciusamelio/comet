@@ -6,17 +6,12 @@ use crate::model::TaskEvent;
 use crate::routes::rocket;
 
 const RECORD_TASK_EVENT_QUERY: &str = "INSERT INTO task_events (task_id, kind) VALUES (?1, ?2)";
-static ROCKET: comet::cloudflare::FetchApp = comet::cloudflare::FetchApp::new(build_rocket);
-
-fn build_rocket(env: Env, _ctx: Context) -> rocket::Rocket<rocket::Build> {
-    rocket(env)
-}
 
 #[event(fetch)]
 pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
 
-    ROCKET.fetch(req, env, ctx).await
+    comet::cloudflare::fetch(req, env, ctx, rocket).await
 }
 
 /// Consumes `TaskEvent` messages published by the API routes and records

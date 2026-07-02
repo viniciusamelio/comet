@@ -20,19 +20,13 @@ fn index() -> &'static str {
     "hello from Rocket on Cloudflare Workers"
 }
 
-fn rocket(env: Env) -> rocket::Rocket<rocket::Build> {
+fn rocket(env: Env, _ctx: Context) -> rocket::Rocket<rocket::Build> {
     rocket::build().manage(env).mount("/", routes![index])
-}
-
-static ROCKET: comet::cloudflare::FetchApp = comet::cloudflare::FetchApp::new(build_rocket);
-
-fn build_rocket(env: Env, _ctx: Context) -> rocket::Rocket<rocket::Build> {
-    rocket(env)
 }
 
 #[event(fetch)]
 pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
-    ROCKET.fetch(req, env, ctx).await
+    comet::cloudflare::fetch(req, env, ctx, rocket).await
 }
 ```
 
@@ -112,9 +106,9 @@ the consumer's side.
 - `native-client` (default): a `RocketWorker` that dispatches
   `WorkerRequest`/`WorkerResponse` through Rocket's local async client.
   Useful for testing the request/response shapes without a `worker` runtime.
-- `cloudflare`: the `comet::cloudflare` module — `FetchApp`, `serve()`, the
-  `Application` impl for `Rocket<Build>`, `local()`, and `local_stream()`.
-  Requires `worker`.
+- `cloudflare`: the `comet::cloudflare` module — `fetch()`, `FetchApp`,
+  `serve()`, the `Application` impl for `Rocket<Build>`, `local()`, and
+  `local_stream()`. Requires `worker`.
 - `cloudflare-d1`, `cloudflare-queue`, `cloudflare-kv`, `cloudflare-r2`,
   `cloudflare-service`, `cloudflare-hyperdrive`: typed request guards for the
   corresponding Cloudflare bindings. `cloudflare-r2` also enables the

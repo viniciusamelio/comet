@@ -46,7 +46,7 @@ async fn main(
     env: worker::Env,
     ctx: worker::Context,
 ) -> worker::Result<worker::Response> {
-    ROCKET.fetch(req, env, ctx).await
+    comet::cloudflare::fetch(req, env, ctx, rocket).await
 }
 ```
 
@@ -62,12 +62,9 @@ fn index() -> &'static str {
     "hello from Rocket on Cloudflare Workers"
 }
 
-fn rocket() -> rocket::Rocket<rocket::Build> {
+fn rocket(_env: worker::Env, _ctx: worker::Context) -> rocket::Rocket<rocket::Build> {
     rocket::build().mount("/", routes![index])
 }
-
-static ROCKET: comet::cloudflare::FetchApp =
-    comet::cloudflare::FetchApp::new(|_env, _ctx| rocket());
 
 #[event(fetch)]
 async fn main(
@@ -75,7 +72,7 @@ async fn main(
     env: worker::Env,
     ctx: worker::Context,
 ) -> worker::Result<worker::Response> {
-    ROCKET.fetch(req, env, ctx).await
+    comet::cloudflare::fetch(req, env, ctx, rocket).await
 }
 ```
 
