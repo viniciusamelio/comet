@@ -63,15 +63,13 @@ async fn list_tasks(db: comet::cloudflare::D1<DB>) {
 }
 ```
 
-Rocket boxes route handler futures — and streaming responder bodies — as
-`Future`/`Stream` + `Send`. D1/Queue calls and `worker::Delay` all resolve
-through `wasm_bindgen_futures::JsFuture`, which is `!Send`. Since
-`wasm32-unknown-unknown` under Workers has no threads, route handlers wrap
-their body with `comet::cloudflare::local(...)` and streaming responders
-(like `/stream`) wrap their stream with `comet::cloudflare::local_stream(...)`
-to satisfy that bound soundly — see their doc comments in `comet`'s
-`src/lib.rs` for why these have to be plain functions returning `impl
-Future`/`impl Stream`, not `async fn`.
+Worker builds of the vendored Rocket use local-boxed route futures, so route
+handlers can await D1/Queue calls directly. Streaming responder bodies still
+flow through Rocket's `Stream + Send` responder bound. Streams that await
+Worker primitives, like `/stream` with `worker::Delay`, should wrap the stream
+with `comet::cloudflare::local_stream(...)`. `comet::cloudflare::local(...)`
+remains available for manual compatibility cases outside normal route
+codegen.
 
 ## Setup
 

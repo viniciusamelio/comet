@@ -7,7 +7,10 @@ pub type Result<'r> = std::result::Result<Response<'r>, crate::http::Status>;
 
 /// Type alias for the return type of a _raw_ [`Catcher`](crate::Catcher)'s
 /// [`Handler`].
+#[cfg(not(feature = "worker"))]
 pub type BoxFuture<'r, T = Result<'r>> = futures::future::BoxFuture<'r, T>;
+#[cfg(feature = "worker")]
+pub type BoxFuture<'r, T = Result<'r>> = futures::future::LocalBoxFuture<'r, T>;
 
 /// Trait implemented by [`Catcher`](crate::Catcher) error handlers.
 ///
@@ -88,7 +91,8 @@ pub type BoxFuture<'r, T = Result<'r>> = futures::future::BoxFuture<'r, T>;
 ///      directly as the parameter to `rocket.register("/", )`.
 ///   3. Unlike static-function-based handlers, this custom handler can make use
 ///      of internal state.
-#[crate::async_trait]
+#[cfg_attr(not(feature = "worker"), crate::async_trait)]
+#[cfg_attr(feature = "worker", crate::async_trait(?Send))]
 pub trait Handler: Cloneable + Send + Sync + 'static {
     /// Called by Rocket when an error with `status` for a given `Request`
     /// should be handled by this handler.

@@ -613,12 +613,24 @@ impl<S, E, F> Outcome<S, E, F> {
     }
 }
 
+#[cfg(not(feature = "worker"))]
 impl<'a, S: Send + 'a, E: Send + 'a, F: Send + 'a> Outcome<S, E, F> {
     /// Pins a future that resolves to `self`, returning a
     /// [`BoxFuture`](crate::futures::future::BoxFuture) that resolves to
     /// `self`.
     #[inline]
     pub fn pin(self) -> futures::future::BoxFuture<'a, Self> {
+        Box::pin(async move { self })
+    }
+}
+
+#[cfg(feature = "worker")]
+impl<'a, S: 'a, E: 'a, F: 'a> Outcome<S, E, F> {
+    /// Pins a future that resolves to `self`, returning a
+    /// [`LocalBoxFuture`](crate::futures::future::LocalBoxFuture) that resolves
+    /// to `self`.
+    #[inline]
+    pub fn pin(self) -> futures::future::LocalBoxFuture<'a, Self> {
         Box::pin(async move { self })
     }
 }

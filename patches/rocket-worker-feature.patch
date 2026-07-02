@@ -900,3 +900,114 @@ index 2c6b234..fa631e4 100644
  
 +#[cfg(feature = "server")]
  pub use for_both;
+
+diff --git a/core/lib/src/catcher/handler.rs b/core/lib/src/catcher/handler.rs
+index f33ceba..2af9b6d 100644
+--- a/core/lib/src/catcher/handler.rs
++++ b/core/lib/src/catcher/handler.rs
+@@ -7,7 +7,10 @@ pub type Result<'r> = std::result::Result<Response<'r>, crate::http::Status>;
+ 
+ /// Type alias for the return type of a _raw_ [`Catcher`](crate::Catcher)'s
+ /// [`Handler`].
++#[cfg(not(feature = "worker"))]
+ pub type BoxFuture<'r, T = Result<'r>> = futures::future::BoxFuture<'r, T>;
++#[cfg(feature = "worker")]
++pub type BoxFuture<'r, T = Result<'r>> = futures::future::LocalBoxFuture<'r, T>;
+ 
+ /// Trait implemented by [`Catcher`](crate::Catcher) error handlers.
+ ///
+@@ -88,7 +91,8 @@ pub type BoxFuture<'r, T = Result<'r>> = futures::future::BoxFuture<'r, T>;
+ ///      directly as the parameter to `rocket.register("/", )`.
+ ///   3. Unlike static-function-based handlers, this custom handler can make use
+ ///      of internal state.
+-#[crate::async_trait]
++#[cfg_attr(not(feature = "worker"), crate::async_trait)]
++#[cfg_attr(feature = "worker", crate::async_trait(?Send))]
+ pub trait Handler: Cloneable + Send + Sync + 'static {
+     /// Called by Rocket when an error with `status` for a given `Request`
+     /// should be handled by this handler.
+diff --git a/core/lib/src/local/asynchronous/response.rs b/core/lib/src/local/asynchronous/response.rs
+index 06ae18e..34ea142 100644
+--- a/core/lib/src/local/asynchronous/response.rs
++++ b/core/lib/src/local/asynchronous/response.rs
+@@ -64,9 +64,25 @@ impl Drop for LocalResponse<'_> {
+ }
+ 
+ impl<'c> LocalResponse<'c> {
++    #[cfg(not(feature = "worker"))]
+     pub(crate) fn new<F, O>(req: Request<'c>, f: F) -> impl Future<Output = LocalResponse<'c>>
+         where F: FnOnce(&'c Request<'c>) -> O + Send,
+               O: Future<Output = Response<'c>> + Send
++    {
++        Self::from_request_future(req, f)
++    }
++
++    #[cfg(feature = "worker")]
++    pub(crate) fn new<F, O>(req: Request<'c>, f: F) -> impl Future<Output = LocalResponse<'c>>
++        where F: FnOnce(&'c Request<'c>) -> O,
++              O: Future<Output = Response<'c>>
++    {
++        Self::from_request_future(req, f)
++    }
++
++    fn from_request_future<F, O>(req: Request<'c>, f: F) -> impl Future<Output = LocalResponse<'c>>
++        where F: FnOnce(&'c Request<'c>) -> O,
++              O: Future<Output = Response<'c>>
+     {
+         // `LocalResponse` is a self-referential structure. In particular,
+         // `response` and `cookies` can refer to `_request` and its contents. As
+diff --git a/core/lib/src/outcome.rs b/core/lib/src/outcome.rs
+index 35521aa..ffcce39 100644
+--- a/core/lib/src/outcome.rs
++++ b/core/lib/src/outcome.rs
+@@ -613,6 +613,7 @@ impl<S, E, F> Outcome<S, E, F> {
+     }
+ }
+ 
++#[cfg(not(feature = "worker"))]
+ impl<'a, S: Send + 'a, E: Send + 'a, F: Send + 'a> Outcome<S, E, F> {
+     /// Pins a future that resolves to `self`, returning a
+     /// [`BoxFuture`](crate::futures::future::BoxFuture) that resolves to
+@@ -623,6 +624,17 @@ impl<'a, S: Send + 'a, E: Send + 'a, F: Send + 'a> Outcome<S, E, F> {
+     }
+ }
+ 
++#[cfg(feature = "worker")]
++impl<'a, S: 'a, E: 'a, F: 'a> Outcome<S, E, F> {
++    /// Pins a future that resolves to `self`, returning a
++    /// [`LocalBoxFuture`](crate::futures::future::LocalBoxFuture) that resolves
++    /// to `self`.
++    #[inline]
++    pub fn pin(self) -> futures::future::LocalBoxFuture<'a, Self> {
++        Box::pin(async move { self })
++    }
++}
++
+ crate::export! {
+     /// Unwraps a [`Success`](Outcome::Success) or propagates a `Forward` or
+     /// `Error` by returning early.
+diff --git a/core/lib/src/route/handler.rs b/core/lib/src/route/handler.rs
+index b42d81e..6e278c7 100644
+--- a/core/lib/src/route/handler.rs
++++ b/core/lib/src/route/handler.rs
+@@ -8,7 +8,10 @@ pub type Outcome<'r> = crate::outcome::Outcome<Response<'r>, Status, (Data<'r>,
+ 
+ /// Type alias for the return type of a _raw_ [`Route`](crate::Route)'s
+ /// [`Handler`].
++#[cfg(not(feature = "worker"))]
+ pub type BoxFuture<'r, T = Outcome<'r>> = futures::future::BoxFuture<'r, T>;
++#[cfg(feature = "worker")]
++pub type BoxFuture<'r, T = Outcome<'r>> = futures::future::LocalBoxFuture<'r, T>;
+ 
+ /// Trait implemented by [`Route`](crate::Route) request handlers.
+ ///
+@@ -133,7 +136,8 @@ pub type BoxFuture<'r, T = Outcome<'r>> = futures::future::BoxFuture<'r, T>;
+ /// Use this alternative when a single configuration is desired and your custom
+ /// handler is private to your application. For all other cases, a custom
+ /// `Handler` implementation is preferred.
+-#[crate::async_trait]
++#[cfg_attr(not(feature = "worker"), crate::async_trait)]
++#[cfg_attr(feature = "worker", crate::async_trait(?Send))]
+ pub trait Handler: Cloneable + Send + Sync + 'static {
+     /// Called by Rocket when a `Request` with its associated `Data` should be
+     /// handled by this handler.

@@ -8,7 +8,10 @@ pub type Outcome<'r> = crate::outcome::Outcome<Response<'r>, Status, (Data<'r>, 
 
 /// Type alias for the return type of a _raw_ [`Route`](crate::Route)'s
 /// [`Handler`].
+#[cfg(not(feature = "worker"))]
 pub type BoxFuture<'r, T = Outcome<'r>> = futures::future::BoxFuture<'r, T>;
+#[cfg(feature = "worker")]
+pub type BoxFuture<'r, T = Outcome<'r>> = futures::future::LocalBoxFuture<'r, T>;
 
 /// Trait implemented by [`Route`](crate::Route) request handlers.
 ///
@@ -133,7 +136,8 @@ pub type BoxFuture<'r, T = Outcome<'r>> = futures::future::BoxFuture<'r, T>;
 /// Use this alternative when a single configuration is desired and your custom
 /// handler is private to your application. For all other cases, a custom
 /// `Handler` implementation is preferred.
-#[crate::async_trait]
+#[cfg_attr(not(feature = "worker"), crate::async_trait)]
+#[cfg_attr(feature = "worker", crate::async_trait(?Send))]
 pub trait Handler: Cloneable + Send + Sync + 'static {
     /// Called by Rocket when a `Request` with its associated `Data` should be
     /// handled by this handler.

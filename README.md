@@ -57,13 +57,15 @@ works today:
 - Cloudflare bindings (`Env`, D1, Queues, KV, R2, service bindings, and
   Hyperdrive) via Rocket managed state — `comet::cloudflare::D1`,
   `QueueBinding`, `Kv`, `R2Bucket`, `ServiceBinding`, and `Hyperdrive`
-  provide typed request guards for named bindings, while
-  `comet::cloudflare::local()`/`local_stream()` bridge Rocket's `Future +
-  Send` route dispatch (and `Send`-bound streaming responders) with the
-  `!Send` futures/streams that `worker` calls resolve through.
+  provide typed request guards for named bindings. Worker builds use
+  local-boxed Rocket route futures, so routes can await D1/Queue calls
+  directly. `comet::cloudflare::local()` remains available for manual
+  compatibility cases, and `local_stream()` bridges Rocket's `Send`-bound
+  streaming responders with `!Send` Worker streams.
 
-What's not there yet: WebSockets and guards for KV/R2/service
-bindings/Hyperdrive. See
+What's not there yet: WebSockets and storage-backed replacements for
+filesystem APIs such as `FileServer`, `NamedFile`, and disk-backed
+`TempFile`. See
 [`docs/rocket-worker-roadmap.md`](docs/rocket-worker-roadmap.md) for the full
 plan.
 
@@ -106,7 +108,8 @@ the consumer's side.
   `WorkerRequest`/`WorkerResponse` through Rocket's local async client.
   Useful for testing the request/response shapes without a `worker` runtime.
 - `cloudflare`: the `comet::cloudflare` module — `FetchApp`, `serve()`, the
-  `Application` impl for `Rocket<Build>`, and `local()`. Requires `worker`.
+  `Application` impl for `Rocket<Build>`, `local()`, and `local_stream()`.
+  Requires `worker`.
 - `cloudflare-d1`, `cloudflare-queue`, `cloudflare-kv`, `cloudflare-r2`,
   `cloudflare-service`, `cloudflare-hyperdrive`: typed request guards for the
   corresponding Cloudflare bindings.

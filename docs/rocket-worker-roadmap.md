@@ -277,16 +277,14 @@ Rocket's local client or server launch path.
    - Inject `worker::Env` into request-local state.
    - Provide guards for KV, R2, D1, Queues, service bindings, and Hyperdrive.
    - `examples/cloudflare-worker` demonstrates a working version of this tier:
-     `Env` is injected via Rocket managed state (`.manage(env)`), and routes
-     pull `D1Database`/`Queue` off it directly with `&State<Env>`. The
-     remaining wrinkle is that Rocket boxes route futures as `Future + Send`,
-     while D1/Queue calls resolve through `JsFuture`, which is `!Send`. `comet`
-     provides `comet::cloudflare::local()` for this (backed by
-     `send_wrapper::SendWrapper`, sound on wasm32 since there are no threads),
-     so app authors wrap a handler body once instead of hand-rolling
-     `SendWrapper` per route. A proper fix upstream would have Rocket's
-     codegen emit a `LocalBoxFuture` (no `Send` bound) under the `worker`
-     feature instead of needing this wrapper at all.
+     `Env` is injected via Rocket managed state (`.manage(env)`), typed
+     guards pull named D1/Queue bindings from it, and routes await those
+     Worker futures directly. Under Rocket's `worker` feature, route and
+     catcher handler futures are local-boxed instead of `Send`-boxed, matching
+     the single-threaded Worker isolate model. `comet::cloudflare::local()`
+     remains as a compatibility helper for manual futures, while normal route
+     code no longer needs it. The patch file still needs to be regenerated
+     from the current vendored Rocket delta.
 
 4. Worker-specific exclusions
    - Do not support Rocket socket launch APIs in Workers.

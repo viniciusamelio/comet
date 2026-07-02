@@ -66,35 +66,29 @@ pub fn stream_demo() -> rocket::response::stream::ByteStream<impl rocket::future
 
 #[get("/tasks")]
 pub async fn list_tasks(db: D1<DB>) -> ApiResult<Json<Vec<Task>>> {
-    comet::cloudflare::local(async move {
-        let rows = db
-            .prepare(TASKS_QUERY)
-            .all()
-            .await
-            .map_err(ApiError::from)?
-            .results::<TaskRow>()
-            .map_err(ApiError::from)?;
+    let rows = db
+        .prepare(TASKS_QUERY)
+        .all()
+        .await
+        .map_err(ApiError::from)?
+        .results::<TaskRow>()
+        .map_err(ApiError::from)?;
 
-        Ok(Json(rows.into_iter().map(Task::from).collect()))
-    })
-    .await
+    Ok(Json(rows.into_iter().map(Task::from).collect()))
 }
 
 #[get("/tasks/<id>")]
 pub async fn get_task(id: i32, db: D1<DB>) -> ApiResult<Json<Task>> {
-    comet::cloudflare::local(async move {
-        let row = db
-            .prepare(TASK_BY_ID_QUERY)
-            .bind(&[JsValue::from(id)])
-            .map_err(ApiError::from)?
-            .first::<TaskRow>(None)
-            .await
-            .map_err(ApiError::from)?
-            .ok_or(ApiError::NotFound)?;
+    let row = db
+        .prepare(TASK_BY_ID_QUERY)
+        .bind(&[JsValue::from(id)])
+        .map_err(ApiError::from)?
+        .first::<TaskRow>(None)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or(ApiError::NotFound)?;
 
-        Ok(Json(Task::from(row)))
-    })
-    .await
+    Ok(Json(Task::from(row)))
 }
 
 #[post("/tasks", data = "<new_task>")]
@@ -103,26 +97,23 @@ pub async fn create_task(
     db: D1<DB>,
     queue: QueueBinding<TaskEvents>,
 ) -> ApiResult<Json<Task>> {
-    comet::cloudflare::local(async move {
-        let title = new_task
-            .validated_title()
-            .map_err(|message| ApiError::BadRequest(message.to_string()))?;
+    let title = new_task
+        .validated_title()
+        .map_err(|message| ApiError::BadRequest(message.to_string()))?;
 
-        let row = db
-            .prepare(INSERT_TASK_QUERY)
-            .bind(&[JsValue::from(title)])
-            .map_err(ApiError::from)?
-            .first::<TaskRow>(None)
-            .await
-            .map_err(ApiError::from)?
-            .ok_or_else(|| ApiError::BadRequest("insert did not return a row".to_string()))?;
+    let row = db
+        .prepare(INSERT_TASK_QUERY)
+        .bind(&[JsValue::from(title)])
+        .map_err(ApiError::from)?
+        .first::<TaskRow>(None)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::BadRequest("insert did not return a row".to_string()))?;
 
-        let task: Task = row.into();
-        publish_task_event(&queue, task.id, TaskEventKind::Created).await?;
+    let task: Task = row.into();
+    publish_task_event(&queue, task.id, TaskEventKind::Created).await?;
 
-        Ok(Json(task))
-    })
-    .await
+    Ok(Json(task))
 }
 
 #[post("/tasks/<id>/complete")]
@@ -131,22 +122,19 @@ pub async fn complete_task(
     db: D1<DB>,
     queue: QueueBinding<TaskEvents>,
 ) -> ApiResult<Json<Task>> {
-    comet::cloudflare::local(async move {
-        let row = db
-            .prepare(COMPLETE_TASK_QUERY)
-            .bind(&[JsValue::from(id)])
-            .map_err(ApiError::from)?
-            .first::<TaskRow>(None)
-            .await
-            .map_err(ApiError::from)?
-            .ok_or(ApiError::NotFound)?;
+    let row = db
+        .prepare(COMPLETE_TASK_QUERY)
+        .bind(&[JsValue::from(id)])
+        .map_err(ApiError::from)?
+        .first::<TaskRow>(None)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or(ApiError::NotFound)?;
 
-        let task: Task = row.into();
-        publish_task_event(&queue, task.id, TaskEventKind::Completed).await?;
+    let task: Task = row.into();
+    publish_task_event(&queue, task.id, TaskEventKind::Completed).await?;
 
-        Ok(Json(task))
-    })
-    .await
+    Ok(Json(task))
 }
 
 pub fn rocket(env: Env) -> Rocket<Build> {

@@ -7,6 +7,9 @@ repo root's `patches/`) applied on top, in order:
 
 1. `rocket-worker-feature.patch` — splits Rocket into transport-independent
    and server-enabled surfaces so it compiles for `wasm32-unknown-unknown`.
+   It also makes route/catcher handler futures local-boxed under the `worker`
+   feature, which lets Worker routes await `!Send` JavaScript futures directly
+   on a single-threaded isolate.
 2. `rocket-worker-streaming-request.patch` — adds a `RawStream::Worker`
    variant and `Data::from_stream()` constructor so a Cloudflare Worker
    request body can be streamed into Rocket's `Data` instead of buffered
@@ -40,3 +43,21 @@ cp -R core /path/to/comet/vendor/rocket/core
 If the patch no longer applies cleanly against a newer Rocket commit, that's
 the signal to revisit upstreaming it instead of re-vendoring — see
 `docs/rocket-worker-roadmap.md`.
+
+## Current validation
+
+As of 2026-07-02, the Worker-facing delta was validated with:
+
+```sh
+cargo fmt --check
+cargo test --features cloudflare,cloudflare-d1,cloudflare-queue,cloudflare-kv,cloudflare-r2,cloudflare-service,cloudflare-hyperdrive
+cargo check --manifest-path examples/cloudflare-worker/Cargo.toml
+cd examples/cloudflare-worker && npm run test:integration
+RUSTC="$(rustup which rustc)" "$(rustup which cargo)" check --manifest-path vendor/rocket/core/lib/Cargo.toml
+RUSTC="$(rustup which rustc)" "$(rustup which cargo)" check --manifest-path vendor/rocket/core/lib/Cargo.toml --target wasm32-unknown-unknown --no-default-features --features worker
+```
+
+Both Rocket checks pass. The remaining Rocket warning baseline is non-blocking:
+native builds report existing `cfg(nightly)`/`rust_analyzer` check-cfg noise,
+and worker builds additionally report unused server-oriented items that are
+compiled but not exercised without the `server` feature.

@@ -64,9 +64,25 @@ impl Drop for LocalResponse<'_> {
 }
 
 impl<'c> LocalResponse<'c> {
+    #[cfg(not(feature = "worker"))]
     pub(crate) fn new<F, O>(req: Request<'c>, f: F) -> impl Future<Output = LocalResponse<'c>>
         where F: FnOnce(&'c Request<'c>) -> O + Send,
               O: Future<Output = Response<'c>> + Send
+    {
+        Self::from_request_future(req, f)
+    }
+
+    #[cfg(feature = "worker")]
+    pub(crate) fn new<F, O>(req: Request<'c>, f: F) -> impl Future<Output = LocalResponse<'c>>
+        where F: FnOnce(&'c Request<'c>) -> O,
+              O: Future<Output = Response<'c>>
+    {
+        Self::from_request_future(req, f)
+    }
+
+    fn from_request_future<F, O>(req: Request<'c>, f: F) -> impl Future<Output = LocalResponse<'c>>
+        where F: FnOnce(&'c Request<'c>) -> O,
+              O: Future<Output = Response<'c>>
     {
         // `LocalResponse` is a self-referential structure. In particular,
         // `response` and `cookies` can refer to `_request` and its contents. As
