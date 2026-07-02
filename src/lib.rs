@@ -139,6 +139,8 @@ pub mod cloudflare {
     }
 
     pub type DispatchFuture = Pin<Box<dyn Future<Output = Result<WorkerResponse>>>>;
+    type WebSocketHandler =
+        Box<dyn FnOnce(worker::WebSocket) -> Pin<Box<dyn Future<Output = Result<()>>>>>;
 
     impl<F, Fut> Application for F
     where
@@ -150,24 +152,88 @@ pub mod cloudflare {
         }
     }
 
-    /// Wraps a future so it satisfies Rocket's `Future + Send` bound on route
-    /// handlers.
+    thread_local! {
+        static PENDING_WEBSOCKET: RefCell<Option<WebSocketHandler>> = const { RefCell::new(None) };
+    }
+
+    #[derive(Debug)]
+    pub enum WebSocketUpgradeError {
+        NotUpgrade,
+    }
+
+    /// Request guard for Worker WebSocket upgrade routes.
+    ///
+    /// Use this in a normal Rocket route and return [`WebSocketResponse`] from
+    /// [`WebSocketUpgrade::accept()`]. The Cloudflare adapter intercepts that
+    /// response and returns a real `worker::Response::from_websocket(...)`.
+    pub struct WebSocketUpgrade;
+
+    #[rocket::async_trait]
+    impl<'r> FromRequest<'r> for WebSocketUpgrade {
+        type Error = WebSocketUpgradeError;
+
+        async fn from_request(request: &'r rocket::Request<'_>) -> Outcome<Self, Self::Error> {
+            let is_upgrade = request
+                .headers()
+                .get_one("upgrade")
+                .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+
+            if is_upgrade {
+                Outcome::Success(Self)
+            } else {
+                Outcome::Error((Status::UpgradeRequired, WebSocketUpgradeError::NotUpgrade))
+            }
+        }
+    }
+
+    impl WebSocketUpgrade {
+        pub fn accept<H, Fut>(self, handler: H) -> WebSocketResponse
+        where
+            H: FnOnce(worker::WebSocket) -> Fut + 'static,
+            Fut: Future<Output = Result<()>> + 'static,
+        {
+            WebSocketResponse {
+                handler: Box::new(|socket| Box::pin(handler(socket))),
+            }
+        }
+    }
+
+    /// Route response for a Worker WebSocket upgrade.
+    pub struct WebSocketResponse {
+        handler: WebSocketHandler,
+    }
+
+    impl<'r> rocket::response::Responder<'r, 'static> for WebSocketResponse {
+        fn respond_to(self, _: &'r rocket::Request<'_>) -> rocket::response::Result<'static> {
+            PENDING_WEBSOCKET.with(|pending| {
+                *pending.borrow_mut() = Some(self.handler);
+            });
+
+            rocket::Response::build()
+                .status(Status::SwitchingProtocols)
+                .raw_header("x-comet-websocket-upgrade", "1")
+                .ok()
+        }
+    }
+
+    /// Wraps a non-`Send` future in a same-thread `Send` wrapper for manual
+    /// compatibility cases.
     ///
     /// D1, Queue, and other `worker` binding calls resolve through
     /// `wasm_bindgen_futures::JsFuture`, which is `!Send`. `wasm32-unknown-unknown`
     /// under Workers has no threads, so asserting `Send` here is sound:
     /// [`SendWrapper`] only panics if polled from a different thread than the
-    /// one it was created on, which cannot happen. Wrap the whole body of any
-    /// route handler that awaits a `worker` binding call:
+    /// one it was created on, which cannot happen.
+    ///
+    /// Normal Rocket route handlers no longer need this wrapper in Worker
+    /// builds: the vendored Rocket uses local-boxed route futures under the
+    /// `worker` feature. Keep `local()` for custom/manual futures that still
+    /// flow through an external `Send` bound.
     ///
     /// ```ignore
-    /// #[get("/tasks")]
-    /// async fn list_tasks(env: &State<Env>) -> Json<Vec<Task>> {
-    ///     comet::cloudflare::local(async {
-    ///         // ... .await on D1/Queue calls here ...
-    ///     })
-    ///     .await
-    /// }
+    /// let value = comet::cloudflare::local(async {
+    ///     worker_future.await
+    /// }).await;
     /// ```
     ///
     /// This must be a plain function returning `impl Future`, not an `async
@@ -431,6 +497,227 @@ pub mod cloudflare {
         }
     }
 
+    /// A Rocket responder for an R2 object body.
+    ///
+    /// Use [`R2Object::get()`] or [`R2Object::get_range()`] from a route that
+    /// receives an [`R2Bucket`] guard. The response preserves R2 HTTP metadata,
+    /// ETag, content length, and streams the object through Rocket instead of
+    /// buffering it as a local file.
+    #[cfg(feature = "cloudflare-r2")]
+    #[derive(Debug)]
+    pub struct R2Object {
+        object: worker::Object,
+        status: Status,
+    }
+
+    #[cfg(feature = "cloudflare-r2")]
+    impl R2Object {
+        pub fn from_object(object: worker::Object) -> Option<Self> {
+            object.body().is_some().then_some(Self {
+                object,
+                status: Status::Ok,
+            })
+        }
+
+        pub async fn get(bucket: &worker::Bucket, key: impl Into<String>) -> Result<Option<Self>> {
+            Ok(bucket.get(key).execute().await?.and_then(Self::from_object))
+        }
+
+        pub async fn get_range(
+            bucket: &worker::Bucket,
+            key: impl Into<String>,
+            range: worker::Range,
+        ) -> Result<Option<Self>> {
+            let object = bucket.get(key).range(range).execute().await?;
+            Ok(object.and_then(|object| {
+                Self::from_object(object).map(|mut response| {
+                    response.status = Status::PartialContent;
+                    response
+                })
+            }))
+        }
+
+        pub fn object(&self) -> &worker::Object {
+            &self.object
+        }
+    }
+
+    #[cfg(feature = "cloudflare-r2")]
+    impl<'r> rocket::response::Responder<'r, 'static> for R2Object {
+        fn respond_to(self, _: &'r rocket::Request<'_>) -> rocket::response::Result<'static> {
+            let headers = Headers::new();
+            self.object
+                .write_http_metadata(headers.clone())
+                .map_err(|_| Status::InternalServerError)?;
+
+            let Some(body) = self.object.body() else {
+                return Err(Status::InternalServerError);
+            };
+
+            let stream = body.stream().map_err(|_| Status::InternalServerError)?;
+            let reader = R2BodyReader::new(stream);
+            let size = self.object.size();
+
+            let mut response = rocket::Response::build();
+            response.status(self.status);
+            response.raw_header("content-length", size.to_string());
+            response.raw_header("etag", self.object.http_etag());
+            response.raw_header("accept-ranges", "bytes");
+            if self.status == Status::PartialContent {
+                if let Ok(range) = self.object.range() {
+                    if let Some(content_range) = content_range_header(&range, size) {
+                        response.raw_header("content-range", content_range);
+                    }
+                }
+            }
+
+            for (name, value) in headers.entries() {
+                response.header(Header::new(name, value));
+            }
+
+            response.streamed_body(reader).ok()
+        }
+    }
+
+    #[cfg(feature = "cloudflare-r2")]
+    fn content_range_header(range: &worker::Range, size: u64) -> Option<String> {
+        let (start, end) = match *range {
+            worker::Range::OffsetWithLength { offset, length } => {
+                if length == 0 {
+                    return None;
+                }
+
+                (offset, offset.saturating_add(length).saturating_sub(1))
+            }
+            worker::Range::OffsetToEnd { offset } => {
+                if offset >= size {
+                    return None;
+                }
+
+                (offset, size.saturating_sub(1))
+            }
+            worker::Range::Prefix { length } => {
+                if length == 0 || size == 0 {
+                    return None;
+                }
+
+                (0, length.min(size).saturating_sub(1))
+            }
+            worker::Range::Suffix { suffix } => {
+                if suffix == 0 || size == 0 {
+                    return None;
+                }
+
+                (size.saturating_sub(suffix), size.saturating_sub(1))
+            }
+        };
+
+        Some(format!(
+            "bytes {start}-{}/{size}",
+            end.min(size.saturating_sub(1))
+        ))
+    }
+
+    #[cfg(feature = "cloudflare-r2")]
+    struct R2BodyReader {
+        stream: Pin<Box<worker::ByteStream>>,
+        current: Option<std::io::Cursor<Vec<u8>>>,
+    }
+
+    #[cfg(feature = "cloudflare-r2")]
+    impl R2BodyReader {
+        fn new(stream: worker::ByteStream) -> Self {
+            Self {
+                stream: Box::pin(stream),
+                current: None,
+            }
+        }
+    }
+
+    #[cfg(feature = "cloudflare-r2")]
+    // Workers wasm is single-threaded; this reader is polled only inside the
+    // request isolate. The wrapped JS stream is never moved to another thread.
+    unsafe impl Send for R2BodyReader {}
+
+    #[cfg(feature = "cloudflare-r2")]
+    impl rocket::tokio::io::AsyncRead for R2BodyReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut rocket::tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            loop {
+                if let Some(current) = self.current.as_mut() {
+                    let position = current.position() as usize;
+                    let bytes = current.get_ref();
+                    if position < bytes.len() {
+                        let remaining = &bytes[position..];
+                        let len = remaining.len().min(buf.remaining());
+                        buf.put_slice(&remaining[..len]);
+                        current.set_position((position + len) as u64);
+                        return std::task::Poll::Ready(Ok(()));
+                    }
+                }
+
+                match futures_util::Stream::poll_next(self.stream.as_mut(), cx) {
+                    std::task::Poll::Pending => return std::task::Poll::Pending,
+                    std::task::Poll::Ready(Some(Ok(chunk))) => {
+                        self.current = Some(std::io::Cursor::new(chunk));
+                    }
+                    std::task::Poll::Ready(Some(Err(error))) => {
+                        return std::task::Poll::Ready(Err(to_io_error(error)));
+                    }
+                    std::task::Poll::Ready(None) => return std::task::Poll::Ready(Ok(())),
+                }
+            }
+        }
+    }
+
+    /// Returns `true` when `req` is a Worker WebSocket upgrade request.
+    ///
+    /// Most applications should prefer a normal Rocket route that takes
+    /// [`WebSocketUpgrade`] and returns [`WebSocketResponse`]. This lower-level
+    /// helper remains available for applications that intentionally handle
+    /// upgrades before Rocket dispatch.
+    pub fn is_websocket_upgrade(req: &Request) -> Result<bool> {
+        Ok(req
+            .headers()
+            .get("upgrade")?
+            .is_some_and(|value| value.eq_ignore_ascii_case("websocket")))
+    }
+
+    /// Creates a `101 Switching Protocols` Worker response and runs `handler`
+    /// on the server side of a new [`worker::WebSocketPair`].
+    ///
+    /// Most applications should prefer a normal Rocket route that takes
+    /// [`WebSocketUpgrade`] and returns [`WebSocketResponse`]. This lower-level
+    /// helper remains available for applications that intentionally handle
+    /// upgrades before Rocket dispatch. The returned response owns the client
+    /// side of the pair; `handler` receives the accepted server side and can
+    /// drive `socket.events()` directly.
+    pub fn websocket_response<H, Fut>(handler: H) -> Result<Response>
+    where
+        H: FnOnce(worker::WebSocket) -> Fut + 'static,
+        Fut: Future<Output = Result<()>> + 'static,
+    {
+        websocket_response_boxed(Box::new(|socket| Box::pin(handler(socket))))
+    }
+
+    fn websocket_response_boxed(handler: WebSocketHandler) -> Result<Response> {
+        let pair = worker::WebSocketPair::new()?;
+        let client = pair.client;
+        let server = pair.server;
+        server.accept()?;
+
+        worker::wasm_bindgen_futures::spawn_local(async move {
+            if let Err(error) = handler(server).await {
+                worker::console_error!("websocket handler failed: {}", error);
+            }
+        });
+
+        Response::from_websocket(client)
+    }
+
     #[cfg(feature = "cloudflare-service")]
     #[derive(Debug)]
     pub struct ServiceBinding<B: BindingName> {
@@ -642,15 +929,22 @@ pub mod cloudflare {
             }
         };
 
-        let response = dispatch_on_orbit(rocket, request).await?;
-        response_to_worker(response)
+        match dispatch_on_orbit(rocket, request).await? {
+            DispatchOutcome::Http(response) => response_to_worker(response),
+            DispatchOutcome::WebSocket(handler) => websocket_response_boxed(handler),
+        }
     }
 
     impl Application for Rocket<Build> {
         fn dispatch(self, request: WorkerRequest) -> DispatchFuture {
             Box::pin(async move {
                 let rocket = Rc::new(self.orbit_external().await.map_err(to_worker_error)?);
-                dispatch_on_orbit(rocket, request).await
+                match dispatch_on_orbit(rocket, request).await? {
+                    DispatchOutcome::Http(response) => Ok(response),
+                    DispatchOutcome::WebSocket(_) => Err(Error::RustError(
+                        "websocket route responses require the Cloudflare fetch adapter".into(),
+                    )),
+                }
             })
         }
     }
@@ -658,7 +952,14 @@ pub mod cloudflare {
     /// The shared core of [`Application for Rocket<Build>`] and
     /// [`serve_cached()`]: dispatch a request through an already-ignited
     /// `Rocket<Orbit>`.
-    fn dispatch_on_orbit(rocket: Rc<Rocket<Orbit>>, request: WorkerRequest) -> DispatchFuture {
+    enum DispatchOutcome {
+        Http(WorkerResponse),
+        WebSocket(WebSocketHandler),
+    }
+
+    type OrbitDispatchFuture = Pin<Box<dyn Future<Output = Result<DispatchOutcome>>>>;
+
+    fn dispatch_on_orbit(rocket: Rc<Rocket<Orbit>>, request: WorkerRequest) -> OrbitDispatchFuture {
         Box::pin(async move {
             // Rocket only knows the response status/headers once
             // `dispatch_external()` has actually run the route handler
@@ -697,6 +998,21 @@ pub mod cloudflare {
                     .dispatch_external(&mut rocket_request, data)
                     .await;
 
+                if response.status() == Status::SwitchingProtocols
+                    && response.headers().get_one("x-comet-websocket-upgrade") == Some("1")
+                {
+                    let handler = PENDING_WEBSOCKET.with(|pending| pending.borrow_mut().take());
+                    match handler {
+                        Some(handler) => {
+                            let _ = meta_tx.send(InitialResponse::WebSocket(handler));
+                            return;
+                        }
+                        None => {
+                            Err(to_io_error("websocket route did not register an upgrade handler"))?;
+                        }
+                    }
+                }
+
                 let meta = ResponseMeta::from_response(&response);
 
                 match response.body().preset_size() {
@@ -706,10 +1022,10 @@ pub mod cloudflare {
                     // case (typical JSON API responses, static text, ...).
                     Some(size) if size <= SMALL_BODY_THRESHOLD => {
                         let bytes = response.body_mut().to_bytes().await.map_err(to_io_error)?;
-                        let _ = meta_tx.send((meta, Some(bytes)));
+                        let _ = meta_tx.send(InitialResponse::Http(meta, Some(bytes)));
                     }
                     _ if response.body().is_some() => {
-                        let _ = meta_tx.send((meta, None));
+                        let _ = meta_tx.send(InitialResponse::Http(meta, None));
                         let mut buf = vec![0u8; 64 * 1024];
                         loop {
                             let n = response.body_mut().read(&mut buf).await.map_err(to_io_error)?;
@@ -721,7 +1037,7 @@ pub mod cloudflare {
                         }
                     }
                     _ => {
-                        let _ = meta_tx.send((meta, Some(Vec::new())));
+                        let _ = meta_tx.send(InitialResponse::Http(meta, Some(Vec::new())));
                     }
                 }
             });
@@ -731,27 +1047,45 @@ pub mod cloudflare {
                 .await
                 .transpose()
                 .map_err(to_worker_error)?;
-            let (meta, buffered_body) = meta_rx.await.map_err(|_| {
+            let initial = meta_rx.await.map_err(|_| {
                 Error::RustError("rocket dispatch ended without producing a response".into())
             })?;
 
+            let (meta, buffered_body) = match initial {
+                InitialResponse::Http(meta, buffered_body) => (meta, buffered_body),
+                InitialResponse::WebSocket(handler) => {
+                    if first_chunk.is_some() {
+                        return Err(Error::RustError(
+                            "websocket route produced an unexpected response body".into(),
+                        ));
+                    }
+
+                    return Ok(DispatchOutcome::WebSocket(handler));
+                }
+            };
+
             if let Some(body) = buffered_body {
-                return Ok(WorkerResponse {
+                return Ok(DispatchOutcome::Http(WorkerResponse {
                     status: meta.status,
                     headers: meta.headers,
                     body: WorkerBody::Buffered(body),
-                });
+                }));
             }
 
             let body: BoxedByteStream =
                 Box::pin(futures_util::stream::iter(first_chunk.map(Ok)).chain(body_stream));
 
-            Ok(WorkerResponse {
+            Ok(DispatchOutcome::Http(WorkerResponse {
                 status: meta.status,
                 headers: meta.headers,
                 body: WorkerBody::Streamed(body),
-            })
+            }))
         })
+    }
+
+    enum InitialResponse {
+        Http(ResponseMeta, Option<Vec<u8>>),
+        WebSocket(WebSocketHandler),
     }
 
     struct ResponseMeta {

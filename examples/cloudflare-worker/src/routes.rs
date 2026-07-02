@@ -1,8 +1,14 @@
-use comet::cloudflare::{BindingName, D1, QueueBinding};
+use comet::cloudflare::{
+    BindingName, D1, QueueBinding, R2Bucket, R2Object, WebSocketResponse, WebSocketUpgrade,
+};
+use rocket::data::Capped;
+use rocket::futures::StreamExt;
+use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::{Build, Rocket};
+use std::path::PathBuf;
 use wasm_bindgen::JsValue;
-use worker::Env;
+use worker::{Env, WebsocketEvent};
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{NewTask, Task, TaskEvent, TaskEventKind, TaskRow};
@@ -24,6 +30,12 @@ pub struct TaskEvents;
 
 impl BindingName for TaskEvents {
     const NAME: &'static str = "TASK_EVENTS";
+}
+
+pub struct Assets;
+
+impl BindingName for Assets {
+    const NAME: &'static str = "ASSETS";
 }
 
 async fn publish_task_event(
@@ -62,6 +74,55 @@ pub fn stream_demo() -> rocket::response::stream::ByteStream<impl rocket::future
     };
 
     rocket::response::stream::ByteStream(comet::cloudflare::local_stream(raw))
+}
+
+#[get("/ws/echo")]
+pub async fn websocket_echo(ws: WebSocketUpgrade) -> WebSocketResponse {
+    ws.accept(|socket| async move {
+        let mut events = socket.events()?;
+        while let Some(event) = events.next().await {
+            match event? {
+                WebsocketEvent::Message(message) => {
+                    if let Some(text) = message.text() {
+                        socket.send_with_str(text)?;
+                    } else if let Some(bytes) = message.bytes() {
+                        socket.send_with_bytes(bytes)?;
+                    }
+                }
+                WebsocketEvent::Close(_) => break,
+            }
+        }
+
+        Ok(())
+    })
+}
+
+#[put("/assets/<key..>", data = "<body>")]
+pub async fn put_asset(
+    key: PathBuf,
+    body: Capped<Vec<u8>>,
+    bucket: R2Bucket<Assets>,
+) -> Result<Status, Status> {
+    if !body.is_complete() {
+        return Err(Status::PayloadTooLarge);
+    }
+
+    bucket
+        .put(asset_key(key), body.value)
+        .execute()
+        .await
+        .map_err(|_| Status::InternalServerError)?;
+
+    Ok(Status::Created)
+}
+
+#[get("/assets/<key..>")]
+pub async fn get_asset(key: PathBuf, bucket: R2Bucket<Assets>) -> Option<R2Object> {
+    R2Object::get(&bucket, asset_key(key)).await.ok().flatten()
+}
+
+fn asset_key(key: PathBuf) -> String {
+    key.to_string_lossy().replace('\\', "/")
 }
 
 #[get("/tasks")]
@@ -140,7 +201,9 @@ pub async fn complete_task(
 pub fn rocket(env: Env) -> Rocket<Build> {
     use rocket::data::{Limits, ToByteUnit};
 
-    let limits = Limits::default().limit("string", 25.megabytes());
+    let limits = Limits::default()
+        .limit("string", 25.megabytes())
+        .limit("bytes", 25.megabytes());
     let config = rocket::Config {
         limits,
         ..rocket::Config::default()
@@ -152,6 +215,9 @@ pub fn rocket(env: Env) -> Rocket<Build> {
             index,
             echo,
             stream_demo,
+            websocket_echo,
+            put_asset,
+            get_asset,
             list_tasks,
             get_task,
             create_task,

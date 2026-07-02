@@ -283,15 +283,31 @@ Rocket's local client or server launch path.
      catcher handler futures are local-boxed instead of `Send`-boxed, matching
      the single-threaded Worker isolate model. `comet::cloudflare::local()`
      remains as a compatibility helper for manual futures, while normal route
-     code no longer needs it. The patch file still needs to be regenerated
-     from the current vendored Rocket delta.
+     code no longer needs it. The patch file is regenerated from the current
+     vendored Rocket delta.
 
 4. Worker-specific exclusions
    - Do not support Rocket socket launch APIs in Workers.
-   - Do not support filesystem-backed `FileServer`, `NamedFile`, or `TempFile`
-     until a separate storage-backed design exists.
+   - Do not support filesystem-backed `FileServer`, `NamedFile`, or disk-backed
+     `TempFile` in Workers. Workers do not expose a durable local filesystem
+     for request-serving assets, so `comet` should provide storage-backed
+     alternatives instead of making these responders appear portable.
+   - R2 is the first storage-backed replacement path: `R2Bucket<B>` names the
+     binding, and `R2Object` can be returned from a route to stream an object
+     body with R2 HTTP metadata, ETag, `Content-Length`, and optional ranged
+     reads through `R2Object::get_range()`. Range support is explicit: the
+     helper accepts `worker::Range` and emits `206 Partial Content` plus
+     `Content-Range` when R2 reports the served range. Automatic parsing of
+     incoming HTTP `Range` headers is intentionally left as follow-up API
+     design, not hidden inside the responder.
    - Handle WebSockets with Cloudflare's Worker WebSocket APIs, not Hyper
-     upgrades.
+     upgrades. The preferred API is still a normal Rocket route:
+     `WebSocketUpgrade` validates the upgrade request and
+     `WebSocketResponse` carries the accepted socket task back to the adapter,
+     which returns a real Worker `WebSocketPair` response. The lower-level
+     `is_websocket_upgrade()` and `websocket_response()` helpers remain
+     available for manual fetch-level handling. The example's `/ws/echo`
+     endpoint is covered by integration tests.
 
 ## Execution Tracking
 

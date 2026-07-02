@@ -53,11 +53,20 @@ cargo fmt --check
 cargo test --features cloudflare,cloudflare-d1,cloudflare-queue,cloudflare-kv,cloudflare-r2,cloudflare-service,cloudflare-hyperdrive
 cargo check --manifest-path examples/cloudflare-worker/Cargo.toml
 cd examples/cloudflare-worker && npm run test:integration
+cd examples/cloudflare-worker && npm run test:perf
 RUSTC="$(rustup which rustc)" "$(rustup which cargo)" check --manifest-path vendor/rocket/core/lib/Cargo.toml
 RUSTC="$(rustup which rustc)" "$(rustup which cargo)" check --manifest-path vendor/rocket/core/lib/Cargo.toml --target wasm32-unknown-unknown --no-default-features --features worker
 ```
 
-Both Rocket checks pass. The remaining Rocket warning baseline is non-blocking:
-native builds report existing `cfg(nightly)`/`rust_analyzer` check-cfg noise,
-and worker builds additionally report unused server-oriented items that are
-compiled but not exercised without the `server` feature.
+Both Rocket checks pass. The example integration test covers D1, Queues, R2
+object round-tripping, streaming responses, and a Worker WebSocket echo path.
+The performance test completed without request errors under local `wrangler
+dev`.
+
+The remaining Rocket warning baseline is non-blocking: native builds report
+existing `cfg(nightly)`/`rust_analyzer` check-cfg noise, and worker builds
+additionally report unused server-oriented items that are compiled but not
+exercised without the `server` feature. Native `cargo check` of the
+Cloudflare example also reports dead-code warnings because the HTTP routes are
+mounted from the wasm-only Worker entrypoint rather than from the native test
+library target.

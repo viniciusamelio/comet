@@ -2,11 +2,13 @@
 
 This example is a small but real Rust Cloudflare Worker built with Rocket
 routes through `comet`. It's a task tracker backed by D1, with task lifecycle
-changes published to a Queue and consumed asynchronously.
+changes published to a Queue and consumed asynchronously. It also exercises R2
+object streaming and a Worker WebSocket route.
 
 It depends on `comet` with `default-features = false` and `features =
-["cloudflare"]`, so it can compile to `wasm32-unknown-unknown` without pulling
-Rocket's native local client. The Worker entrypoint calls:
+["cloudflare", "cloudflare-d1", "cloudflare-queue", "cloudflare-r2"]`, so it
+can compile to `wasm32-unknown-unknown` without pulling Rocket's native local
+client. The Worker entrypoint calls:
 
 ```rust
 ROCKET.fetch(req, env, ctx).await
@@ -20,8 +22,9 @@ ROCKET.fetch(req, env, ctx).await
   and unit tests for all of it.
 - `src/routes.rs` — Rocket routes that read and write a `tasks` table in D1
   and publish `TaskEvent`s to a queue. The routes use typed comet binding
-  guards (`D1<DB>` and `QueueBinding<TaskEvents>`) so handlers do not manually
-  pull bindings out of `Env`. All D1/Queue calls are async.
+  guards (`D1<DB>`, `QueueBinding<TaskEvents>`, and `R2Bucket<Assets>`) so
+  handlers do not manually pull bindings out of `Env`. All D1/Queue/R2 calls
+  are async.
 - `src/entry.rs` — the wasm-only glue: the `#[event(fetch)]` handler that
   hands requests to Rocket via `comet::cloudflare::FetchApp`, and the
   `#[event(queue)]` consumer that asynchronously records each `TaskEvent`
@@ -45,6 +48,9 @@ ROCKET.fetch(req, env, ctx).await
 - `GET /tasks/<id>` — fetch a task by id (404 if missing).
 - `POST /tasks/<id>/complete` — mark a task done and publish a `completed`
   event to the queue.
+- `PUT /assets/<key..>` — store a request body in R2.
+- `GET /assets/<key..>` — stream an R2 object back through Rocket.
+- `GET /ws/echo` — Worker WebSocket echo route.
 
 ### Rocket + non-`Send` bindings
 
@@ -71,6 +77,50 @@ with `comet::cloudflare::local_stream(...)`. `comet::cloudflare::local(...)`
 remains available for manual compatibility cases outside normal route
 codegen.
 
+### R2 object responses
+
+`comet::cloudflare::R2Object` is the Worker-side replacement path for routes
+that would otherwise reach for local filesystem responders such as
+`NamedFile`. It streams an R2 object body and copies R2 HTTP metadata into the
+Rocket response:
+
+```rust
+struct Assets;
+
+impl comet::cloudflare::BindingName for Assets {
+    const NAME: &'static str = "ASSETS";
+}
+
+#[get("/assets/<key..>")]
+async fn asset(
+    key: std::path::PathBuf,
+    bucket: comet::cloudflare::R2Bucket<Assets>,
+) -> Option<comet::cloudflare::R2Object> {
+    let key = key.to_string_lossy().replace('\\', "/");
+    comet::cloudflare::R2Object::get(&bucket, key).await.ok().flatten()
+}
+```
+
+### WebSocket routes
+
+WebSockets use normal Rocket route mounting with a Worker-specific request
+guard and response type:
+
+```rust
+#[get("/ws/echo")]
+async fn websocket_echo(
+    ws: comet::cloudflare::WebSocketUpgrade,
+) -> comet::cloudflare::WebSocketResponse {
+    ws.accept(|socket| async move {
+        // drive socket.events() here
+        Ok(())
+    })
+}
+```
+
+The Worker entrypoint does not need a path-specific upgrade branch; it keeps
+calling `ROCKET.fetch(req, env, ctx).await`.
+
 ## Setup
 
 Create a D1 database and a queue, and wire them into `wrangler.jsonc`:
@@ -78,6 +128,7 @@ Create a D1 database and a queue, and wire them into `wrangler.jsonc`:
 ```sh
 npx wrangler d1 create comet-cloudflare-worker-example
 npx wrangler queues create task-events
+npx wrangler r2 bucket create comet-cloudflare-worker-example-assets
 ```
 
 Copy the `database_id` from the first command's output into the
@@ -112,6 +163,9 @@ curl -X POST http://localhost:8787/tasks \
 
 curl http://localhost:8787/tasks
 curl -X POST http://localhost:8787/tasks/1/complete
+
+curl -X PUT http://localhost:8787/assets/hello.txt --data-binary 'hello from R2'
+curl http://localhost:8787/assets/hello.txt
 ```
 
 After completing a task, check that the queue consumer recorded both
@@ -142,12 +196,13 @@ npm run test
 `tests/integration.sh` drives a real `wrangler dev` instance end to end: it
 resets local D1 state, applies migrations, starts the worker, exercises every
 route over HTTP, confirms the queue consumer actually wrote the
-`task_events` audit trail, and proves request/response bodies are genuinely
-streamed rather than buffered — a 1MiB `/echo` body round-trips exactly, and
-`/stream`'s time-to-first-byte is checked against its total response time
-(streamed: first byte in a few ms, full response ~1.2s; buffered: both would
-be ~1.2s). It needs `rustup` with the `wasm32-unknown-unknown`
-target, `jq`, and `npm install` already run:
+`task_events` audit trail, round-trips a 1MiB object through R2, verifies the
+`/ws/echo` WebSocket route, and proves request/response bodies are
+genuinely streamed rather than buffered — a 1MiB `/echo` body round-trips
+exactly, and `/stream`'s time-to-first-byte is checked against its total
+response time (streamed: first byte in a few ms, full response ~1.2s;
+buffered: both would be ~1.2s). It needs `rustup` with the
+`wasm32-unknown-unknown` target, `jq`, and `npm install` already run:
 
 ```sh
 npm run test:integration

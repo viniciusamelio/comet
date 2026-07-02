@@ -19,6 +19,12 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "ASSETS",
+      "bucket_name": "comet-cloudflare-worker-example-assets"
+    }
+  ],
   "queues": {
     "producers": [
       {

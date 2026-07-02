@@ -38,8 +38,8 @@ pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
 
 See [`examples/cloudflare-worker`](examples/cloudflare-worker) for a complete
 app: a D1-backed task API with async D1/Queue calls, custom struct
-(de)serialization, an async queue consumer, and both unit and end-to-end
-tests.
+(de)serialization, R2 object streaming, a Worker WebSocket echo endpoint, an
+async queue consumer, and both unit and end-to-end tests.
 
 ## Status
 
@@ -62,10 +62,15 @@ works today:
   directly. `comet::cloudflare::local()` remains available for manual
   compatibility cases, and `local_stream()` bridges Rocket's `Send`-bound
   streaming responders with `!Send` Worker streams.
+- R2-backed object responses via `comet::cloudflare::R2Object`, which streams
+  an object body through Rocket, preserves R2 HTTP metadata, and avoids
+  pretending that local filesystem responders work in Workers.
+- Worker WebSocket routes via `WebSocketUpgrade` and `WebSocketResponse`.
+  WebSockets still become Cloudflare `WebSocketPair` responses under the hood,
+  but applications can mount them with normal Rocket route syntax.
 
-What's not there yet: WebSockets and storage-backed replacements for
-filesystem APIs such as `FileServer`, `NamedFile`, and disk-backed
-`TempFile`. See
+What's not there yet: full storage-backed replacements for filesystem APIs
+such as `FileServer`, `NamedFile`, and disk-backed `TempFile`. See
 [`docs/rocket-worker-roadmap.md`](docs/rocket-worker-roadmap.md) for the full
 plan.
 
@@ -112,7 +117,8 @@ the consumer's side.
   Requires `worker`.
 - `cloudflare-d1`, `cloudflare-queue`, `cloudflare-kv`, `cloudflare-r2`,
   `cloudflare-service`, `cloudflare-hyperdrive`: typed request guards for the
-  corresponding Cloudflare bindings.
+  corresponding Cloudflare bindings. `cloudflare-r2` also enables the
+  `R2Object` responder.
 
 ## Development
 

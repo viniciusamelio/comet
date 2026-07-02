@@ -23,6 +23,7 @@ trap cleanup EXIT
 
 echo "Resetting local D1 state and applying migrations..."
 rm -rf .wrangler/state/v3/d1
+rm -rf .wrangler/state/v3/r2
 npx wrangler d1 migrations apply DB --local >"$LOG" 2>&1
 
 echo "Starting wrangler dev on port $PORT..."
@@ -93,6 +94,56 @@ STREAM_IS_PROGRESSIVE=$(awk -v ttfb="$STREAM_TTFB" -v total="$STREAM_TOTAL" \
   'BEGIN { print (ttfb < 0.3 && (total - ttfb) > 0.5) ? "true" : "false" }')
 check "response body streams progressively (ttfb=${STREAM_TTFB}s, total=${STREAM_TOTAL}s)" \
   "true" "$STREAM_IS_PROGRESSIVE"
+
+ASSET_BODY="$(mktemp)"
+ASSET_GET="$(mktemp)"
+head -c 1048576 /dev/urandom >"$ASSET_BODY"
+ASSET_PUT_STATUS=$(curl -s -X PUT "$BASE/assets/large.bin" --data-binary @"$ASSET_BODY" -o /dev/null -w '%{http_code}')
+check "large R2 asset upload returns 201" "201" "$ASSET_PUT_STATUS"
+ASSET_GET_STATUS=$(curl -s "$BASE/assets/large.bin" -o "$ASSET_GET" -w '%{http_code}')
+check "large R2 asset download returns 200" "200" "$ASSET_GET_STATUS"
+if cmp -s "$ASSET_BODY" "$ASSET_GET"; then
+  ASSET_MATCH="true"
+else
+  ASSET_MATCH="false"
+fi
+check "large R2 asset body round-trips byte-for-byte" "true" "$ASSET_MATCH"
+rm -f "$ASSET_BODY" "$ASSET_GET"
+
+WS_ECHO=$(PORT="$PORT" node <<'NODE'
+const WebSocket = globalThis.WebSocket || require("ws");
+const ws = new WebSocket(`ws://localhost:${process.env.PORT}/ws/echo`);
+const message = "comet websocket echo";
+
+function on(target, event, handler) {
+  if (typeof target.addEventListener === "function") {
+    target.addEventListener(event, handler);
+  } else {
+    target.on(event, handler);
+  }
+}
+
+const timeout = setTimeout(() => {
+  console.error("websocket timed out");
+  process.exit(1);
+}, 5000);
+
+on(ws, "open", () => ws.send(message));
+on(ws, "message", (event) => {
+  const data = event && "data" in event ? event.data : event;
+  const text = Buffer.isBuffer(data) ? data.toString("utf8") : String(data);
+  clearTimeout(timeout);
+  console.log(text);
+  ws.close();
+});
+on(ws, "error", (error) => {
+  clearTimeout(timeout);
+  console.error(error);
+  process.exit(1);
+});
+NODE
+)
+check "websocket echo round-trips text" "comet websocket echo" "$WS_ECHO"
 
 CREATE=$(curl -s -X POST "$BASE/tasks" -H 'content-type: application/json' -d '{"title":"integration test task"}')
 TASK_ID=$(echo "$CREATE" | jq -r .id)
