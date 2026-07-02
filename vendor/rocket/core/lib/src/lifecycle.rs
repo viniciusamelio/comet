@@ -53,9 +53,9 @@ impl Rocket<Orbit> {
     /// The caller is responsible for constructing the [`Request`] from
     /// transport metadata and keeping it alive for as long as the returned
     /// [`Response`] is used.
-    pub async fn dispatch_external<'r>(
-        &'r self,
-        request: &'r mut Request<'r>,
+    pub async fn dispatch_external<'r, 's: 'r>(
+        &'s self,
+        request: &'r mut Request<'s>,
         mut data: Data<'r>,
     ) -> Response<'r> {
         let token = self.preprocess(request, &mut data).await;

@@ -5,10 +5,10 @@ routes through `comet`. It's a task tracker backed by D1, with task lifecycle
 changes published to a Queue and consumed asynchronously. It also exercises R2
 object streaming and a Worker WebSocket route.
 
-It depends on `comet` with `default-features = false` and `features =
-["cloudflare", "cloudflare-d1", "cloudflare-queue", "cloudflare-r2"]`, so it
-can compile to `wasm32-unknown-unknown` without pulling Rocket's native local
-client. The Worker entrypoint calls:
+It depends on `comet` with `default-features = false` and the Cloudflare
+features needed by the example (`cloudflare`, D1, Queue, R2, and WebSocket), so
+it can compile to `wasm32-unknown-unknown` without pulling Rocket's native
+local client. The Worker entrypoint calls:
 
 ```rust
 comet::cloudflare::fetch(req, env, ctx, rocket).await
@@ -104,7 +104,8 @@ async fn asset(
 ### WebSocket routes
 
 WebSockets use normal Rocket route mounting with a Worker-specific request
-guard and response type:
+guard and response type. Enable `comet`'s `cloudflare-websocket` feature to use
+these types:
 
 ```rust
 #[get("/ws/echo")]

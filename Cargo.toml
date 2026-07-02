@@ -19,6 +19,7 @@ cloudflare-kv = ["cloudflare"]
 cloudflare-queue = ["cloudflare", "worker/queue"]
 cloudflare-r2 = ["cloudflare"]
 cloudflare-service = ["cloudflare"]
+cloudflare-websocket = ["cloudflare"]
 native-client = ["dep:rocket"]
 
 [dependencies]
@@ -30,3 +31,10 @@ async-stream = { version = "0.3", optional = true }
 futures-channel = { version = "0.3", optional = true }
 futures-util = "0.3"
 bytes = "1"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "native_adapter"
+harness = false

@@ -244,24 +244,17 @@ Rocket's local client or server launch path.
    route (side effects included), so they can't be produced eagerly either.
    An earlier version of this doc proposed solving the `'static` requirement
    with `wasm_bindgen_futures::spawn_local` + an `mpsc` channel; that turned
-   out to be unnecessary complexity. What's actually there: the whole
-   dispatch — using an already-ignited Rocket when available, building the request, running
-   `dispatch_external()`, then looping over `body_mut().read()` — is one
-   `async_stream::try_stream!` block (Rocket already depends on `async-stream`
-   for its own `response::stream` module, re-exported as `rocket::async_stream`).
-   Because it's one continuous generator, `rocket`/`rocket_request`/`response`
-   can safely self-reference each other the same way they always could inside
-   a single `async fn` body — no separate task, no channel. Status/headers are
-   sent out through a `futures_channel::oneshot` the instant they're known
-   (strictly before the first yielded byte, or before the generator ends if
-   the body is empty); `dispatch()` drives the stream exactly one item to
-   guarantee that oneshot has already fired, splices the possible first chunk
-   back onto the front with `stream::iter(..).chain(..)`, and returns a
-   `WorkerResponse` with the now-known status/headers and the remainder as a
-   `WorkerBody::Streamed`. If the response body has a known preset size at or
-   below the small-body threshold, the adapter reads it directly into
-   `WorkerBody::Buffered` instead of allocating the 64KiB streaming scratch
-   buffer.
+   out to be unnecessary complexity. What's actually there: the adapter
+   dispatches directly through an already-ignited Rocket when available. A
+   small vendored Rocket lifetime fix keeps `dispatch_external()` from tying
+   the Rocket borrow to the response lifetime more tightly than `dispatch()`
+   itself requires. After dispatch, empty responses and bodies with a known
+   preset size at or below the small-body threshold are read directly into
+   `WorkerBody::Buffered`; they do not allocate the 64KiB streaming scratch
+   buffer and do not pass through `async_stream!`, `oneshot`, or a first-poll
+   metadata handshake. Large or unknown-size bodies keep the Rocket request
+   pinned together with the response and cached `Rocket<Orbit>` while
+   `body_mut().read()` yields chunks to a Worker stream.
 
    Streaming *responses* built with Rocket's own `response::stream` module
    (`ByteStream!`/`TextStream!`/etc.) that await a `worker` primitive between
@@ -298,8 +291,8 @@ Rocket's local client or server launch path.
      incoming HTTP `Range` headers is intentionally left as follow-up API
      design, not hidden inside the responder.
    - Handle WebSockets with Cloudflare's Worker WebSocket APIs, not Hyper
-     upgrades. The preferred API is still a normal Rocket route:
-     `WebSocketUpgrade` validates the upgrade request and
+     upgrades. This is opt-in via `cloudflare-websocket`. The preferred API is
+     still a normal Rocket route: `WebSocketUpgrade` validates the upgrade request and
      `WebSocketResponse` carries the accepted socket task back to the adapter,
      which returns a real Worker `WebSocketPair` response. The lower-level
      `is_websocket_upgrade()` and `websocket_response()` helpers remain

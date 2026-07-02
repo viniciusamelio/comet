@@ -139,6 +139,14 @@ pub mod cloudflare {
     }
 
     pub type DispatchFuture = Pin<Box<dyn Future<Output = Result<WorkerResponse>>>>;
+
+    struct RocketDispatchRequest {
+        method: Method,
+        uri: String,
+        headers: Vec<(String, String)>,
+        body: WorkerBody,
+    }
+    #[cfg(feature = "cloudflare-websocket")]
     type WebSocketHandler =
         Box<dyn FnOnce(worker::WebSocket) -> Pin<Box<dyn Future<Output = Result<()>>>>>;
 
@@ -152,10 +160,12 @@ pub mod cloudflare {
         }
     }
 
+    #[cfg(feature = "cloudflare-websocket")]
     thread_local! {
         static PENDING_WEBSOCKET: RefCell<Option<WebSocketHandler>> = const { RefCell::new(None) };
     }
 
+    #[cfg(feature = "cloudflare-websocket")]
     #[derive(Debug)]
     pub enum WebSocketUpgradeError {
         NotUpgrade,
@@ -166,8 +176,10 @@ pub mod cloudflare {
     /// Use this in a normal Rocket route and return [`WebSocketResponse`] from
     /// [`WebSocketUpgrade::accept()`]. The Cloudflare adapter intercepts that
     /// response and returns a real `worker::Response::from_websocket(...)`.
+    #[cfg(feature = "cloudflare-websocket")]
     pub struct WebSocketUpgrade;
 
+    #[cfg(feature = "cloudflare-websocket")]
     #[rocket::async_trait]
     impl<'r> FromRequest<'r> for WebSocketUpgrade {
         type Error = WebSocketUpgradeError;
@@ -186,6 +198,7 @@ pub mod cloudflare {
         }
     }
 
+    #[cfg(feature = "cloudflare-websocket")]
     impl WebSocketUpgrade {
         pub fn accept<H, Fut>(self, handler: H) -> WebSocketResponse
         where
@@ -199,10 +212,12 @@ pub mod cloudflare {
     }
 
     /// Route response for a Worker WebSocket upgrade.
+    #[cfg(feature = "cloudflare-websocket")]
     pub struct WebSocketResponse {
         handler: WebSocketHandler,
     }
 
+    #[cfg(feature = "cloudflare-websocket")]
     impl<'r> rocket::response::Responder<'r, 'static> for WebSocketResponse {
         fn respond_to(self, _: &'r rocket::Request<'_>) -> rocket::response::Result<'static> {
             PENDING_WEBSOCKET.with(|pending| {
@@ -679,6 +694,7 @@ pub mod cloudflare {
     /// [`WebSocketUpgrade`] and returns [`WebSocketResponse`]. This lower-level
     /// helper remains available for applications that intentionally handle
     /// upgrades before Rocket dispatch.
+    #[cfg(feature = "cloudflare-websocket")]
     pub fn is_websocket_upgrade(req: &Request) -> Result<bool> {
         Ok(req
             .headers()
@@ -695,6 +711,7 @@ pub mod cloudflare {
     /// upgrades before Rocket dispatch. The returned response owns the client
     /// side of the pair; `handler` receives the accepted server side and can
     /// drive `socket.events()` directly.
+    #[cfg(feature = "cloudflare-websocket")]
     pub fn websocket_response<H, Fut>(handler: H) -> Result<Response>
     where
         H: FnOnce(worker::WebSocket) -> Fut + 'static,
@@ -703,6 +720,7 @@ pub mod cloudflare {
         websocket_response_boxed(Box::new(|socket| Box::pin(handler(socket))))
     }
 
+    #[cfg(feature = "cloudflare-websocket")]
     fn websocket_response_boxed(handler: WebSocketHandler) -> Result<Response> {
         let pair = worker::WebSocketPair::new()?;
         let client = pair.client;
@@ -833,7 +851,7 @@ pub mod cloudflare {
     }
 
     pub async fn serve<A: Application>(mut req: Request, app: A) -> Result<Response> {
-        let request = request_from_worker(&mut req).await?;
+        let request = worker_request_from_worker(&mut req).await?;
         let response = app.dispatch(request).await?;
         response_to_worker(response)
     }
@@ -935,7 +953,7 @@ pub mod cloudflare {
     where
         F: FnOnce() -> Rocket<Build>,
     {
-        let request = request_from_worker(&mut req).await?;
+        let request = rocket_request_from_worker(&mut req).await?;
 
         let cached = ORBIT.with(|cache| cache.borrow().clone());
         let rocket = match cached {
@@ -954,6 +972,7 @@ pub mod cloudflare {
 
         match dispatch_on_orbit(rocket, request).await? {
             DispatchOutcome::Http(response) => response_to_worker(response),
+            #[cfg(feature = "cloudflare-websocket")]
             DispatchOutcome::WebSocket(handler) => websocket_response_boxed(handler),
         }
     }
@@ -962,8 +981,9 @@ pub mod cloudflare {
         fn dispatch(self, request: WorkerRequest) -> DispatchFuture {
             Box::pin(async move {
                 let rocket = Rc::new(self.orbit_external().await.map_err(to_worker_error)?);
-                match dispatch_on_orbit(rocket, request).await? {
+                match dispatch_on_orbit(rocket, request.try_into()?).await? {
                     DispatchOutcome::Http(response) => Ok(response),
+                    #[cfg(feature = "cloudflare-websocket")]
                     DispatchOutcome::WebSocket(_) => Err(Error::RustError(
                         "websocket route responses require the Cloudflare fetch adapter".into(),
                     )),
@@ -977,117 +997,92 @@ pub mod cloudflare {
     /// `Rocket<Orbit>`.
     enum DispatchOutcome {
         Http(WorkerResponse),
+        #[cfg(feature = "cloudflare-websocket")]
         WebSocket(WebSocketHandler),
     }
 
     type OrbitDispatchFuture = Pin<Box<dyn Future<Output = Result<DispatchOutcome>>>>;
 
-    fn dispatch_on_orbit(rocket: Rc<Rocket<Orbit>>, request: WorkerRequest) -> OrbitDispatchFuture {
+    impl TryFrom<WorkerRequest> for RocketDispatchRequest {
+        type Error = Error;
+
+        fn try_from(request: WorkerRequest) -> Result<Self> {
+            Ok(Self {
+                method: parse_method(&request.method).map_err(to_worker_error)?,
+                uri: request.uri,
+                headers: request.headers,
+                body: request.body,
+            })
+        }
+    }
+
+    fn dispatch_on_orbit(
+        rocket: Rc<Rocket<Orbit>>,
+        request: RocketDispatchRequest,
+    ) -> OrbitDispatchFuture {
         Box::pin(async move {
-            // Rocket only knows the response status/headers once
-            // `dispatch_external()` has actually run the route handler
-            // (side effects and all) to completion, so that part can't be
-            // deferred into the body stream below. But `rocket_request` and
-            // `response` self-reference `rocket` (`rocket_request` borrows
-            // it, `response` borrows `rocket_request`), so once dispatch is
-            // done, the *rest* of the work (reading the body incrementally)
-            // can only happen inside the same generator that holds all
-            // three — it can't be handed off to a separately-owned task.
-            // `try_stream!` builds exactly that: one self-contained,
-            // `'static` generator. It sends status/headers out over a
-            // oneshot the moment they're known (always strictly before
-            // the first body byte, or before the stream ends if the body
-            // is empty), and this function drives the stream by exactly
-            // one item to guarantee that has already happened before
-            // returning a `WorkerResponse`.
-            let (meta_tx, meta_rx) = futures_channel::oneshot::channel();
+            let uri = Origin::parse_owned(request.uri)
+                .map_err(|error| to_worker_error(format!("invalid URI: {error}")))?;
 
-            let mut body_stream: BoxedByteStream = Box::pin(async_stream::try_stream! {
-                let method = parse_method(&request.method).map_err(to_io_error)?;
-                let uri = Origin::parse_owned(request.uri)
-                    .map_err(|error| to_io_error(format!("invalid URI: {error}")))?;
+            // Rocket's public response lifetime is tied to the request passed
+            // to `dispatch_external()`. Keep the request pinned so any
+            // response borrows remain stable while a streamed body is read
+            // after this function returns.
+            // SAFETY: `rocket` is an `Rc`, so the `Rocket<Orbit>` allocation
+            // stays at a stable address. Any response that uses this widened
+            // reference is either consumed before `rocket` is dropped or stored
+            // with an `Rc` clone in `StreamedRocketResponse`.
+            let rocket_static = unsafe { rocket_static_ref(&rocket) };
+            let mut rocket_request = Box::pin(rocket::Request::new(
+                rocket_static,
+                request.method,
+                uri,
+                None,
+            ));
+            for (name, value) in request.headers {
+                rocket_request.add_header(Header::new(name, value));
+            }
 
-                let mut rocket_request = rocket::Request::new(&rocket, method, uri, None);
-                for (name, value) in request.headers {
-                    rocket_request.add_header(Header::new(name, value));
-                }
-
-                let data = match request.body {
-                    WorkerBody::Buffered(bytes) => rocket::Data::local(bytes),
-                    WorkerBody::Streamed(stream) => rocket::Data::from_stream(stream),
-                };
-
-                let mut response = rocket
-                    .dispatch_external(&mut rocket_request, data)
-                    .await;
-
-                if response.status() == Status::SwitchingProtocols
-                    && response.headers().get_one("x-comet-websocket-upgrade") == Some("1")
-                {
-                    let handler = PENDING_WEBSOCKET.with(|pending| pending.borrow_mut().take());
-                    match handler {
-                        Some(handler) => {
-                            let _ = meta_tx.send(InitialResponse::WebSocket(handler));
-                            return;
-                        }
-                        None => {
-                            Err(to_io_error("websocket route did not register an upgrade handler"))?;
-                        }
-                    }
-                }
-
-                let meta = ResponseMeta::from_response(&response);
-
-                match response.body().preset_size() {
-                    // Known-size, small: one exact-sized read beats a 64KiB
-                    // scratch buffer plus a read() loop that would only ever
-                    // run once anyway — this is the overwhelmingly common
-                    // case (typical JSON API responses, static text, ...).
-                    Some(size) if size <= SMALL_BODY_THRESHOLD => {
-                        let bytes = response.body_mut().to_bytes().await.map_err(to_io_error)?;
-                        let _ = meta_tx.send(InitialResponse::Http(meta, Some(bytes)));
-                    }
-                    _ if response.body().is_some() => {
-                        let _ = meta_tx.send(InitialResponse::Http(meta, None));
-                        let mut buf = vec![0u8; 64 * 1024];
-                        loop {
-                            let n = response.body_mut().read(&mut buf).await.map_err(to_io_error)?;
-                            if n == 0 {
-                                break;
-                            }
-
-                            yield Bytes::copy_from_slice(&buf[..n]);
-                        }
-                    }
-                    _ => {
-                        let _ = meta_tx.send(InitialResponse::Http(meta, Some(Vec::new())));
-                    }
-                }
-            });
-
-            let first_chunk = body_stream
-                .next()
-                .await
-                .transpose()
-                .map_err(to_worker_error)?;
-            let initial = meta_rx.await.map_err(|_| {
-                Error::RustError("rocket dispatch ended without producing a response".into())
-            })?;
-
-            let (meta, buffered_body) = match initial {
-                InitialResponse::Http(meta, buffered_body) => (meta, buffered_body),
-                InitialResponse::WebSocket(handler) => {
-                    if first_chunk.is_some() {
-                        return Err(Error::RustError(
-                            "websocket route produced an unexpected response body".into(),
-                        ));
-                    }
-
-                    return Ok(DispatchOutcome::WebSocket(handler));
-                }
+            let data = match request.body {
+                WorkerBody::Buffered(bytes) => rocket::Data::local(bytes),
+                WorkerBody::Streamed(stream) => rocket::Data::from_stream(stream),
             };
 
-            if let Some(body) = buffered_body {
+            // SAFETY: the request is pinned in a `Box`; moving the box into
+            // `StreamedRocketResponse` does not move the request allocation.
+            // The response is dropped before the request by field order.
+            let request_ptr = unsafe {
+                rocket_request.as_mut().get_unchecked_mut() as *mut rocket::Request<'static>
+            };
+            let mut response = unsafe {
+                rocket_static
+                    .dispatch_external(&mut *request_ptr, data)
+                    .await
+            };
+
+            #[cfg(feature = "cloudflare-websocket")]
+            if response.status() == Status::SwitchingProtocols
+                && response.headers().get_one("x-comet-websocket-upgrade") == Some("1")
+            {
+                let handler = PENDING_WEBSOCKET.with(|pending| pending.borrow_mut().take());
+                return match handler {
+                    Some(handler) => Ok(DispatchOutcome::WebSocket(handler)),
+                    None => Err(to_worker_error(
+                        "websocket route did not register an upgrade handler",
+                    )),
+                };
+            }
+
+            let meta = ResponseMeta::from_response(&response);
+
+            if response.body().preset_size().unwrap_or(usize::MAX) <= SMALL_BODY_THRESHOLD
+                || response.body().is_none()
+            {
+                let body = response
+                    .body_mut()
+                    .to_bytes()
+                    .await
+                    .map_err(to_worker_error)?;
                 return Ok(DispatchOutcome::Http(WorkerResponse {
                     status: meta.status,
                     headers: meta.headers,
@@ -1095,8 +1090,11 @@ pub mod cloudflare {
                 }));
             }
 
-            let body: BoxedByteStream =
-                Box::pin(futures_util::stream::iter(first_chunk.map(Ok)).chain(body_stream));
+            let body = stream_rocket_response(StreamedRocketResponse {
+                response,
+                request: rocket_request,
+                rocket,
+            });
 
             Ok(DispatchOutcome::Http(WorkerResponse {
                 status: meta.status,
@@ -1106,9 +1104,31 @@ pub mod cloudflare {
         })
     }
 
-    enum InitialResponse {
-        Http(ResponseMeta, Option<Vec<u8>>),
-        WebSocket(WebSocketHandler),
+    struct StreamedRocketResponse {
+        // Drop response before request, and request before rocket.
+        response: rocket::Response<'static>,
+        request: Pin<Box<rocket::Request<'static>>>,
+        rocket: Rc<Rocket<Orbit>>,
+    }
+
+    fn stream_rocket_response(mut state: StreamedRocketResponse) -> BoxedByteStream {
+        Box::pin(async_stream::try_stream! {
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                let n = state.response.body_mut().read(&mut buf).await.map_err(to_io_error)?;
+                if n == 0 {
+                    break;
+                }
+
+                yield Bytes::copy_from_slice(&buf[..n]);
+            }
+
+            let _ = (&state.request, &state.rocket);
+        })
+    }
+
+    unsafe fn rocket_static_ref(rocket: &Rc<Rocket<Orbit>>) -> &'static Rocket<Orbit> {
+        unsafe { &*(&**rocket as *const Rocket<Orbit>) }
     }
 
     struct ResponseMeta {
@@ -1129,7 +1149,19 @@ pub mod cloudflare {
         }
     }
 
-    async fn request_from_worker(req: &mut Request) -> Result<WorkerRequest> {
+    async fn worker_request_from_worker(req: &mut Request) -> Result<WorkerRequest> {
+        let method = req.method().to_string();
+        let request = rocket_request_from_worker(req).await?;
+
+        Ok(WorkerRequest {
+            method,
+            uri: request.uri,
+            headers: request.headers,
+            body: request.body,
+        })
+    }
+
+    async fn rocket_request_from_worker(req: &mut Request) -> Result<RocketDispatchRequest> {
         let url = req.url()?;
         let uri = match url.query() {
             Some(query) => format!("{}?{}", url.path(), query),
@@ -1148,8 +1180,8 @@ pub mod cloudflare {
             Err(_) => WorkerBody::Buffered(Vec::new()),
         };
 
-        Ok(WorkerRequest {
-            method: req.method().to_string(),
+        Ok(RocketDispatchRequest {
+            method: parse_worker_method(req.method())?,
             uri,
             headers: req.headers().entries().collect(),
             body,
@@ -1182,17 +1214,43 @@ pub mod cloudflare {
     }
 
     fn parse_method(method: &str) -> std::result::Result<Method, AdapterError> {
-        match method.to_ascii_uppercase().as_str() {
-            "GET" => Ok(Method::Get),
-            "PUT" => Ok(Method::Put),
-            "POST" => Ok(Method::Post),
-            "DELETE" => Ok(Method::Delete),
-            "HEAD" => Ok(Method::Head),
-            "OPTIONS" => Ok(Method::Options),
-            "PATCH" => Ok(Method::Patch),
-            "TRACE" => Ok(Method::Trace),
-            "CONNECT" => Ok(Method::Connect),
-            _ => Err(AdapterError::InvalidMethod(method.to_owned())),
+        if method.eq_ignore_ascii_case("GET") {
+            Ok(Method::Get)
+        } else if method.eq_ignore_ascii_case("PUT") {
+            Ok(Method::Put)
+        } else if method.eq_ignore_ascii_case("POST") {
+            Ok(Method::Post)
+        } else if method.eq_ignore_ascii_case("DELETE") {
+            Ok(Method::Delete)
+        } else if method.eq_ignore_ascii_case("HEAD") {
+            Ok(Method::Head)
+        } else if method.eq_ignore_ascii_case("OPTIONS") {
+            Ok(Method::Options)
+        } else if method.eq_ignore_ascii_case("PATCH") {
+            Ok(Method::Patch)
+        } else if method.eq_ignore_ascii_case("TRACE") {
+            Ok(Method::Trace)
+        } else if method.eq_ignore_ascii_case("CONNECT") {
+            Ok(Method::Connect)
+        } else {
+            Err(AdapterError::InvalidMethod(method.to_owned()))
+        }
+    }
+
+    fn parse_worker_method(method: worker::Method) -> Result<Method> {
+        match method {
+            worker::Method::Head => Ok(Method::Head),
+            worker::Method::Get => Ok(Method::Get),
+            worker::Method::Post => Ok(Method::Post),
+            worker::Method::Put => Ok(Method::Put),
+            worker::Method::Patch => Ok(Method::Patch),
+            worker::Method::Delete => Ok(Method::Delete),
+            worker::Method::Options => Ok(Method::Options),
+            worker::Method::Connect => Ok(Method::Connect),
+            worker::Method::Trace => Ok(Method::Trace),
+            worker::Method::Report => Err(Error::RustError(
+                "unsupported HTTP method for Rocket dispatch: REPORT".into(),
+            )),
         }
     }
 
@@ -1257,6 +1315,11 @@ pub mod cloudflare {
         #[rocket::get("/large")]
         fn large() -> String {
             "x".repeat(super::SMALL_BODY_THRESHOLD + 1)
+        }
+
+        #[rocket::get("/empty")]
+        fn empty() -> rocket::http::Status {
+            rocket::http::Status::NoContent
         }
 
         #[test]
@@ -1324,6 +1387,18 @@ pub mod cloudflare {
             match response.body {
                 WorkerBody::Buffered(bytes) => assert_eq!(bytes, b"ok"),
                 WorkerBody::Streamed(_) => panic!("expected small known-size body to be buffered"),
+            }
+        }
+
+        #[rocket::async_test]
+        async fn dispatch_buffers_empty_response_bodies() {
+            let app = rocket::build().mount("/", rocket::routes![empty]);
+            let response = app.dispatch(WorkerRequest::get("/empty")).await.unwrap();
+
+            assert_eq!(response.status, 204);
+            match response.body {
+                WorkerBody::Buffered(bytes) => assert!(bytes.is_empty()),
+                WorkerBody::Streamed(_) => panic!("expected empty body to be buffered"),
             }
         }
 
@@ -1403,17 +1478,26 @@ impl RocketWorker {
 
 #[cfg(feature = "native-client")]
 fn parse_method(method: &str) -> Result<Method, AdapterError> {
-    match method.to_ascii_uppercase().as_str() {
-        "GET" => Ok(Method::Get),
-        "PUT" => Ok(Method::Put),
-        "POST" => Ok(Method::Post),
-        "DELETE" => Ok(Method::Delete),
-        "HEAD" => Ok(Method::Head),
-        "OPTIONS" => Ok(Method::Options),
-        "PATCH" => Ok(Method::Patch),
-        "TRACE" => Ok(Method::Trace),
-        "CONNECT" => Ok(Method::Connect),
-        _ => Err(AdapterError::InvalidMethod(method.to_owned())),
+    if method.eq_ignore_ascii_case("GET") {
+        Ok(Method::Get)
+    } else if method.eq_ignore_ascii_case("PUT") {
+        Ok(Method::Put)
+    } else if method.eq_ignore_ascii_case("POST") {
+        Ok(Method::Post)
+    } else if method.eq_ignore_ascii_case("DELETE") {
+        Ok(Method::Delete)
+    } else if method.eq_ignore_ascii_case("HEAD") {
+        Ok(Method::Head)
+    } else if method.eq_ignore_ascii_case("OPTIONS") {
+        Ok(Method::Options)
+    } else if method.eq_ignore_ascii_case("PATCH") {
+        Ok(Method::Patch)
+    } else if method.eq_ignore_ascii_case("TRACE") {
+        Ok(Method::Trace)
+    } else if method.eq_ignore_ascii_case("CONNECT") {
+        Ok(Method::Connect)
+    } else {
+        Err(AdapterError::InvalidMethod(method.to_owned()))
     }
 }
 

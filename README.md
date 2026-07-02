@@ -59,9 +59,10 @@ works today:
 - R2-backed object responses via `comet::cloudflare::R2Object`, which streams
   an object body through Rocket, preserves R2 HTTP metadata, and avoids
   pretending that local filesystem responders work in Workers.
-- Worker WebSocket routes via `WebSocketUpgrade` and `WebSocketResponse`.
-  WebSockets still become Cloudflare `WebSocketPair` responses under the hood,
-  but applications can mount them with normal Rocket route syntax.
+- Worker WebSocket routes via `WebSocketUpgrade` and `WebSocketResponse` when
+  the `cloudflare-websocket` feature is enabled. WebSockets still become
+  Cloudflare `WebSocketPair` responses under the hood, but applications can
+  mount them with normal Rocket route syntax.
 
 What's not there yet: full storage-backed replacements for filesystem APIs
 such as `FileServer`, `NamedFile`, and disk-backed `TempFile`. See
@@ -113,12 +114,15 @@ the consumer's side.
   `cloudflare-service`, `cloudflare-hyperdrive`: typed request guards for the
   corresponding Cloudflare bindings. `cloudflare-r2` also enables the
   `R2Object` responder.
+- `cloudflare-websocket`: `WebSocketUpgrade`, `WebSocketResponse`, and
+  low-level Worker WebSocket helpers. Keep it off for HTTP-only Workers.
 
 ## Development
 
 ```sh
 cargo test --features native-client   # adapter tests, run natively
 cargo test --no-default-features --features cloudflare   # also runs natively
+cargo bench --bench native_adapter   # adapter-only performance baseline
 cd examples/cloudflare-worker && npm install && npm run test && npm run test:integration
 ```
 
