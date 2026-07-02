@@ -1,0 +1,26 @@
+[package]
+name = "comet"
+version = "0.1.0"
+edition = "2024"
+description = "Run Rocket routes on Cloudflare Workers, backed by a patched Rocket that compiles to wasm32-unknown-unknown."
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["rocket", "cloudflare", "workers", "wasm", "worker"]
+categories = ["web-programming::http-server", "wasm"]
+repository = "https://github.com/viniciusamelio/comet"
+exclude = ["vendor/rocket/core/lib/tests", "vendor/rocket/core/lib/benches"]
+
+[features]
+default = ["native-client"]
+cloudflare = ["dep:rocket", "dep:worker", "dep:send_wrapper", "dep:async-stream", "dep:futures-channel"]
+native-client = ["dep:rocket"]
+
+[dependencies]
+rocket = { path = "vendor/rocket/core/lib", default-features = false, features = ["json", "worker"], optional = true }
+thiserror = "2"
+worker = { version = "0.8.5", optional = true }
+send_wrapper = { version = "0.6", features = ["futures"], optional = true }
+async-stream = { version = "0.3", optional = true }
+futures-channel = { version = "0.3", optional = true }
+futures-util = "0.3"
+bytes = "1"

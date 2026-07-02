@@ -1,0 +1,98 @@
+diff --git a/core/lib/Cargo.toml b/core/lib/Cargo.toml
+index 42b82283..1c5a281b 100644
+--- a/core/lib/Cargo.toml
++++ b/core/lib/Cargo.toml
+@@ -30,6 +30,7 @@ worker = [
+     "hyper-util",
+     "time/wasm-bindgen",
+     "tokio-stream/time",
++    "dep:send_wrapper",
+ ]
+ server = [
+     "hyper",
+@@ -85,6 +86,7 @@ serde = { version = "1.0", features = ["derive"] }
+ figment = { version = "0.10.17", features = ["toml", "env"] }
+ rand = "0.9"
+ getrandom = { version = "0.3", optional = true }
++send_wrapper = { version = "0.6", features = ["futures"], optional = true }
+ either = "1"
+ pin-project-lite = "0.2"
+ indexmap = { version = "2", features = ["serde"] }
+diff --git a/core/lib/src/data/data.rs b/core/lib/src/data/data.rs
+index d30b03af..20d4804a 100644
+--- a/core/lib/src/data/data.rs
++++ b/core/lib/src/data/data.rs
+@@ -56,6 +56,26 @@ impl<'r> Data<'r> {
+         Data::new(Peekable::new(RawReader::new(stream.into())))
+     }
+ 
++    /// Creates a `Data` object from an arbitrary externally-driven byte
++    /// stream, e.g. a Cloudflare Worker request body bridged from a JS
++    /// `ReadableStream`.
++    ///
++    /// Unlike [`Data::local()`], this does not buffer the body before
++    /// dispatching into Rocket: bytes are read from `stream` on demand as
++    /// routes/guards consume the request body.
++    ///
++    /// `stream` need not be `Send`: wasm32 under Workers has no threads, so
++    /// it's wrapped in a `SendWrapper` internally to satisfy Rocket's
++    /// otherwise-`Send`-bound internals soundly.
++    #[cfg(feature = "worker")]
++    #[inline]
++    pub fn from_stream<S>(stream: S) -> Data<'r>
++        where S: futures::stream::Stream<Item = io::Result<bytes::Bytes>> + 'r
++    {
++        let stream = send_wrapper::SendWrapper::new(stream);
++        Data::from(crate::data::data_stream::RawStream::Worker(Box::pin(stream)))
++    }
++
+     /// This creates a `data` object from a local data source `data`.
+     ///
+     /// This constructor is intended for transports and adapters that have
+diff --git a/core/lib/src/data/data_stream.rs b/core/lib/src/data/data_stream.rs
+index 51fbe27e..063483bd 100644
+--- a/core/lib/src/data/data_stream.rs
++++ b/core/lib/src/data/data_stream.rs
+@@ -77,6 +77,15 @@ pub enum RawStream<'r> {
+     #[cfg(feature = "http3-preview")]
+     H3Body(crate::listener::Cancellable<crate::listener::quic::QuicRx>),
+     Multipart(multer::Field<'r>),
++    /// An arbitrary externally-driven byte stream, e.g. a Cloudflare Worker
++    /// request body bridged from a JS `ReadableStream`. Boxed since callers
++    /// (outside this crate) can't name a concrete stream type. `Send` is
++    /// asserted (not actually required of the source stream) by
++    /// [`Data::from_stream()`] via `SendWrapper`, matching every other
++    /// `!Send`-on-wasm32 boundary this adapter crosses: wasm32 under Workers
++    /// has no threads, so the assertion is sound.
++    #[cfg(feature = "worker")]
++    Worker(Pin<Box<dyn Stream<Item = io::Result<Bytes>> + Send + 'r>>),
+ }
+ 
+ impl<'r> TransformReader<'r> {
+@@ -356,6 +365,8 @@ impl Stream for RawStream<'_> {
+             #[cfg(feature = "http3-preview")]
+             RawStream::H3Body(stream) => Pin::new(stream).poll_next(cx),
+             RawStream::Multipart(s) => Pin::new(s).poll_next(cx).map_err(io::Error::other),
++            #[cfg(feature = "worker")]
++            RawStream::Worker(stream) => stream.as_mut().poll_next(cx),
+             RawStream::Empty => Poll::Ready(None),
+         }
+     }
+@@ -371,6 +382,8 @@ impl Stream for RawStream<'_> {
+             #[cfg(feature = "http3-preview")]
+             RawStream::H3Body(_) => (0, Some(0)),
+             RawStream::Multipart(mp) => mp.size_hint(),
++            #[cfg(feature = "worker")]
++            RawStream::Worker(stream) => stream.size_hint(),
+             RawStream::Empty => (0, Some(0)),
+         }
+     }
+@@ -385,6 +398,8 @@ impl std::fmt::Display for RawStream<'_> {
+             #[cfg(feature = "http3-preview")]
+             RawStream::H3Body(_) => f.write_str("http3 quic stream"),
+             RawStream::Multipart(_) => f.write_str("multipart form field"),
++            #[cfg(feature = "worker")]
++            RawStream::Worker(_) => f.write_str("worker request body"),
+         }
+     }
+ }

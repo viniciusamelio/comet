@@ -1,0 +1,902 @@
+diff --git a/core/lib/Cargo.toml b/core/lib/Cargo.toml
+index 731b414..42b8228 100644
+--- a/core/lib/Cargo.toml
++++ b/core/lib/Cargo.toml
+@@ -23,14 +23,35 @@ all-features = true
+ workspace = true
+ 
+ [features]
+-default = ["http2", "tokio-macros", "trace"]
+-http2 = ["hyper/http2", "hyper-util/http2"]
+-http3-preview = ["s2n-quic", "s2n-quic-h3", "tls"]
++default = ["server", "http2", "tokio-macros", "trace"]
++worker = [
++    "getrandom/wasm_js",
++    "hyper",
++    "hyper-util",
++    "time/wasm-bindgen",
++    "tokio-stream/time",
++]
++server = [
++    "hyper",
++    "hyper-util",
++    "num_cpus",
++    "tempfile",
++    "tokio/fs",
++    "tokio/net",
++    "tokio/rt-multi-thread",
++    "tokio/signal",
++    "tokio-util/io",
++    "tokio-stream/signal",
++    "tokio-stream/time",
++    "yansi/detect-tty",
++]
++http2 = ["server", "hyper/http2", "hyper-util/http2"]
++http3-preview = ["server", "s2n-quic", "s2n-quic-h3", "tls"]
+ secrets = ["cookie/private", "cookie/key-expansion"]
+ json = ["serde_json"]
+ msgpack = ["rmp-serde"]
+ uuid = ["uuid_", "rocket_http/uuid"]
+-tls = ["rustls", "tokio-rustls", "rustls-pemfile"]
++tls = ["server", "rustls", "tokio-rustls", "rustls-pemfile"]
+ mtls = ["tls", "x509-parser"]
+ tokio-macros = ["tokio/macros"]
+ trace = ["tracing-subscriber", "tinyvec", "thread_local", "rustls?/logging", "tokio-rustls?/logging", "multer/log", "s2n-quic-h3?/tracing"]
+@@ -47,12 +68,12 @@ x509-parser = { version = "0.16", optional = true }
+ # Hyper dependencies
+ http = "1"
+ bytes = "1.4"
+-hyper = { version = "1.1", default-features = false, features = ["http1", "server"] }
+-hyper-util = { version = "0.1.3", default-features = false, features = ["http1", "server", "tokio"] }
++hyper = { version = "1.1", default-features = false, features = ["http1", "server"], optional = true }
++hyper-util = { version = "0.1.3", default-features = false, features = ["http1", "server", "tokio"], optional = true }
+ 
+ # Non-optional, core dependencies from here on out.
+-yansi = { version = "1.0.1", features = ["detect-tty"] }
+-num_cpus = "1.0"
++yansi = { version = "1.0.1", default-features = false }
++num_cpus = { version = "1.0", optional = true }
+ time = { version = "0.3", features = ["macros", "parsing"] }
+ memchr = "2" # TODO: Use pear instead.
+ binascii = "0.1"
+@@ -63,14 +84,15 @@ ubyte = {version = "0.10.2", features = ["serde"] }
+ serde = { version = "1.0", features = ["derive"] }
+ figment = { version = "0.10.17", features = ["toml", "env"] }
+ rand = "0.9"
++getrandom = { version = "0.3", optional = true }
+ either = "1"
+ pin-project-lite = "0.2"
+ indexmap = { version = "2", features = ["serde"] }
+-tempfile = "3"
++tempfile = { version = "3", optional = true }
+ async-trait = "0.1.43"
+ async-stream = "0.3.2"
+ multer = { version = "3.1.0", features = ["tokio-io"] }
+-tokio-stream = { version = "0.1.6", features = ["signal", "time"] }
++tokio-stream = { version = "0.1.6", default-features = false }
+ cookie = { version = "0.18", features = ["percent-encode"] }
+ futures = { version = "0.3.30", default-features = false, features = ["std"] }
+ state = "0.6"
+@@ -97,12 +119,11 @@ features = ["serde"]
+ 
+ [dependencies.tokio]
+ version = "1.35.1"
+-features = ["rt-multi-thread", "net", "io-util", "fs", "time", "sync", "signal", "parking_lot"]
++features = ["io-util", "time", "sync", "parking_lot", "rt"]
+ 
+ [dependencies.tokio-util]
+ version = "0.7"
+ default-features = false
+-features = ["io"]
+ 
+ [dependencies.rustls]
+ version = "0.23"
+diff --git a/core/lib/src/config/config.rs b/core/lib/src/config/config.rs
+index 2686c65..01cb766 100644
+--- a/core/lib/src/config/config.rs
++++ b/core/lib/src/config/config.rs
+@@ -163,6 +163,16 @@ impl Default for Config {
+     }
+ }
+ 
++#[cfg(feature = "worker")]
++fn default_temp_dir() -> RelativePathBuf {
++    "/tmp".into()
++}
++
++#[cfg(not(feature = "worker"))]
++fn default_temp_dir() -> RelativePathBuf {
++    std::env::temp_dir().into()
++}
++
+ impl Config {
+     /// Returns the default configuration for the `debug` profile, _irrespective
+     /// of the Rust compilation profile_ and `ROCKET_PROFILE`.
+@@ -182,13 +192,18 @@ impl Config {
+     pub fn debug_default() -> Config {
+         Config {
+             profile: Self::DEBUG_PROFILE,
+-            workers: num_cpus::get(),
++            workers: {
++                #[cfg(feature = "server")]
++                { num_cpus::get() }
++                #[cfg(not(feature = "server"))]
++                { 1 }
++            },
+             max_blocking: 512,
+             ident: Ident::default(),
+             ip_header: Some(Uncased::from_borrowed("X-Real-IP")),
+             proxy_proto_header: None,
+             limits: Limits::default(),
+-            temp_dir: std::env::temp_dir().into(),
++            temp_dir: default_temp_dir(),
+             keep_alive: 5,
+             #[cfg(feature = "secrets")]
+             secret_key: SecretKey::zero(),
+@@ -253,6 +268,12 @@ impl Config {
+     /// let my_config = Config::figment().extract::<MyConfig>();
+     /// ```
+     pub fn figment() -> Figment {
++        #[cfg(feature = "worker")]
++        {
++            return Figment::from(Config::default());
++        }
++
++        #[cfg(not(feature = "worker"))]
+         Figment::from(Config::default())
+             .merge(Toml::file(Env::var_or("ROCKET_CONFIG", "Rocket.toml")).nested())
+             .merge(Env::prefixed("ROCKET_").ignore(&["PROFILE"]).global())
+diff --git a/core/lib/src/data/data.rs b/core/lib/src/data/data.rs
+index c54fa00..d30b03a 100644
+--- a/core/lib/src/data/data.rs
++++ b/core/lib/src/data/data.rs
+@@ -57,8 +57,11 @@ impl<'r> Data<'r> {
+     }
+ 
+     /// This creates a `data` object from a local data source `data`.
++    ///
++    /// This constructor is intended for transports and adapters that have
++    /// already buffered request body bytes before dispatching into Rocket.
+     #[inline]
+-    pub(crate) fn local(data: Vec<u8>) -> Data<'r> {
++    pub fn local(data: Vec<u8>) -> Data<'r> {
+         Data::new(Peekable::with_buffer(data, true, RawReader::new(RawStream::Empty)))
+     }
+ 
+diff --git a/core/lib/src/data/data_stream.rs b/core/lib/src/data/data_stream.rs
+index 955c98f..51fbe27 100644
+--- a/core/lib/src/data/data_stream.rs
++++ b/core/lib/src/data/data_stream.rs
+@@ -1,14 +1,18 @@
+ use std::pin::Pin;
+ use std::task::{Context, Poll};
+-use std::path::Path;
+ use std::io::{self, Cursor};
++#[cfg(feature = "server")]
++use std::path::Path;
+ 
+ use futures::ready;
+ use futures::stream::Stream;
+-use tokio::fs::File;
+ use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, ReadBuf, Take};
+ use tokio_util::io::StreamReader;
+-use hyper::body::{Body, Bytes, Incoming as HyperBody};
++use bytes::Bytes;
++#[cfg(feature = "server")]
++use hyper::body::{Body, Incoming as HyperBody};
++#[cfg(feature = "server")]
++use tokio::fs::File;
+ 
+ use crate::data::{Capped, N};
+ use crate::data::transform::Transform;
+@@ -68,6 +72,7 @@ pub type RawReader<'r> = StreamReader<RawStream<'r>, Bytes>;
+ /// Raw underlying data stream.
+ pub enum RawStream<'r> {
+     Empty,
++    #[cfg(feature = "server")]
+     Body(HyperBody),
+     #[cfg(feature = "http3-preview")]
+     H3Body(crate::listener::Cancellable<crate::listener::quic::QuicRx>),
+@@ -287,6 +292,7 @@ impl<'r> DataStream<'r> {
+     ///     Ok(format!("Wrote {} bytes to /static/file", file.n))
+     /// }
+     /// ```
++    #[cfg(feature = "server")]
+     pub async fn into_file<P: AsRef<Path>>(self, path: P) -> io::Result<Capped<File>> {
+         let mut file = File::create(path).await?;
+         let n = self.stream_to(&mut tokio::io::BufWriter::new(&mut file)).await?;
+@@ -340,6 +346,7 @@ impl Stream for RawStream<'_> {
+     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+         match self.get_mut() {
+             // TODO: Expose trailer headers, somehow.
++            #[cfg(feature = "server")]
+             RawStream::Body(body) => {
+                 Pin::new(body)
+                     .poll_frame(cx)
+@@ -355,6 +362,7 @@ impl Stream for RawStream<'_> {
+ 
+     fn size_hint(&self) -> (usize, Option<usize>) {
+         match self {
++            #[cfg(feature = "server")]
+             RawStream::Body(body) => {
+                 let hint = body.size_hint();
+                 let (lower, upper) = (hint.lower(), hint.upper());
+@@ -372,6 +380,7 @@ impl std::fmt::Display for RawStream<'_> {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         match self {
+             RawStream::Empty => f.write_str("empty stream"),
++            #[cfg(feature = "server")]
+             RawStream::Body(_) => f.write_str("request body"),
+             #[cfg(feature = "http3-preview")]
+             RawStream::H3Body(_) => f.write_str("http3 quic stream"),
+@@ -380,6 +389,7 @@ impl std::fmt::Display for RawStream<'_> {
+     }
+ }
+ 
++#[cfg(feature = "server")]
+ impl<'r> From<HyperBody> for RawStream<'r> {
+     fn from(value: HyperBody) -> Self {
+         Self::Body(value)
+diff --git a/core/lib/src/error.rs b/core/lib/src/error.rs
+index 60bbdd8..e899a3c 100644
+--- a/core/lib/src/error.rs
++++ b/core/lib/src/error.rs
+@@ -2,12 +2,16 @@
+ 
+ use std::{io, fmt, process};
+ use std::error::Error as StdError;
++#[cfg(feature = "server")]
+ use std::sync::Arc;
+ 
+ use figment::Profile;
+ 
++#[cfg(feature = "server")]
+ use crate::listener::Endpoint;
+-use crate::{Catcher, Ignite, Orbit, Phase, Rocket, Route};
++use crate::{Catcher, Phase, Rocket, Route};
++#[cfg(feature = "server")]
++use crate::{Ignite, Orbit};
+ use crate::trace::Trace;
+ 
+ /// An error that occurred during launch or ignition.
+@@ -56,6 +60,7 @@ pub struct Error {
+ #[non_exhaustive]
+ pub enum ErrorKind {
+     /// Binding to the network interface at `.0` (if known) failed with `.1`.
++    #[cfg(feature = "server")]
+     Bind(Option<Endpoint>, Box<dyn StdError + Send>),
+     /// An I/O error occurred during launch.
+     Io(io::Error),
+@@ -77,11 +82,13 @@ pub enum ErrorKind {
+     /// The configuration profile is not debug but no secret key is configured.
+     InsecureSecretKey(Profile),
+     /// Liftoff failed. Contains the Rocket instance that failed to shutdown.
++    #[cfg(feature = "server")]
+     Liftoff(
+         Result<Box<Rocket<Ignite>>, Arc<Rocket<Orbit>>>,
+         tokio::task::JoinError,
+     ),
+     /// Shutdown failed. Contains the Rocket instance that failed to shutdown.
++    #[cfg(feature = "server")]
+     Shutdown(Arc<Rocket<Orbit>>),
+ }
+ 
+@@ -223,6 +230,7 @@ impl From<io::Error> for Error {
+ impl StdError for Error {
+     fn source(&self) -> Option<&(dyn StdError + 'static)> {
+         match &self.kind {
++            #[cfg(feature = "server")]
+             ErrorKind::Bind(_, e) => Some(&**e),
+             ErrorKind::Io(e) => Some(e),
+             ErrorKind::Collisions { .. } => None,
+@@ -230,7 +238,9 @@ impl StdError for Error {
+             ErrorKind::InsecureSecretKey(_) => None,
+             ErrorKind::Config(e) => Some(e),
+             ErrorKind::SentinelAborts(_) => None,
++            #[cfg(feature = "server")]
+             ErrorKind::Liftoff(_, e) => Some(e),
++            #[cfg(feature = "server")]
+             ErrorKind::Shutdown(_) => None,
+         }
+     }
+@@ -240,6 +250,7 @@ impl fmt::Display for ErrorKind {
+     #[inline]
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         match self {
++            #[cfg(feature = "server")]
+             ErrorKind::Bind(_, e) => write!(f, "binding failed: {e}"),
+             ErrorKind::Io(e) => write!(f, "I/O error: {e}"),
+             ErrorKind::Collisions { .. } => "collisions detected".fmt(f),
+@@ -247,7 +258,9 @@ impl fmt::Display for ErrorKind {
+             ErrorKind::InsecureSecretKey(_) => "insecure secret key config".fmt(f),
+             ErrorKind::Config(_) => "failed to extract configuration".fmt(f),
+             ErrorKind::SentinelAborts(_) => "sentinel(s) aborted".fmt(f),
++            #[cfg(feature = "server")]
+             ErrorKind::Liftoff(_, _) => "liftoff failed".fmt(f),
++            #[cfg(feature = "server")]
+             ErrorKind::Shutdown(_) => "shutdown failed".fmt(f),
+         }
+     }
+@@ -281,8 +294,10 @@ impl fmt::Display for Empty {
+ 
+ impl StdError for Empty { }
+ 
++#[cfg(feature = "server")]
+ struct ServerError<'a>(&'a (dyn StdError + 'static));
+ 
++#[cfg(feature = "server")]
+ impl fmt::Display for ServerError<'_> {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         let error = &self.0;
+@@ -308,6 +323,7 @@ impl fmt::Display for ServerError<'_> {
+ 
+ /// Log an error that occurs during request processing
+ #[track_caller]
++#[cfg(feature = "server")]
+ pub(crate) fn log_server_error(error: &(dyn StdError + 'static)) {
+     let mut error: &(dyn StdError + 'static) = error;
+     if error.downcast_ref::<hyper::Error>().is_some() {
+diff --git a/core/lib/src/form/validate.rs b/core/lib/src/form/validate.rs
+index 6a079be..2ebcaae 100644
+--- a/core/lib/src/form/validate.rs
++++ b/core/lib/src/form/validate.rs
+@@ -82,10 +82,15 @@ use std::borrow::Cow;
+ use std::ops::{RangeBounds, Bound};
+ use std::fmt::Debug;
+ 
+-use crate::data::{ByteUnit, Capped};
++use crate::data::Capped;
++#[cfg(feature = "server")]
++use crate::data::ByteUnit;
++#[cfg(feature = "server")]
+ use rocket_http::ContentType;
+ 
+-use crate::{fs::TempFile, form::{Result, Error}};
++use crate::form::{Result, Error};
++#[cfg(feature = "server")]
++use crate::fs::TempFile;
+ 
+ crate::export! {
+     /// A helper macro for custom validation error messages.
+@@ -311,10 +316,12 @@ macro_rules! impl_len {
+ impl_len!(<> str => usize);
+ impl_len!(<> String => usize);
+ impl_len!(<T> Vec<T> => usize);
++#[cfg(feature = "server")]
+ impl_len!(<> TempFile<'_> => u64);
+ impl_len!(<K, V> std::collections::HashMap<K, V> => usize);
+ impl_len!(<K, V> std::collections::BTreeMap<K, V> => usize);
+ 
++#[cfg(feature = "server")]
+ impl Len<ByteUnit> for TempFile<'_> {
+     fn len(&self) -> ByteUnit { self.len().into() }
+     fn len_into_u64(len: ByteUnit) -> u64 { len.into() }
+@@ -787,6 +794,7 @@ pub fn one_of<'v, V, I, R>(value: V, items: R) -> Result<'v, ()>
+ ///     document: TempFile<'r>,
+ /// }
+ /// ```
++#[cfg(feature = "server")]
+ pub fn ext<'v>(file: &TempFile<'_>, r#type: ContentType) -> Result<'v, ()> {
+     if let Some(file_ct) = file.content_type() {
+         if file_ct == &r#type {
+diff --git a/core/lib/src/fs/mod.rs b/core/lib/src/fs/mod.rs
+index 94a0145..fed6d71 100644
+--- a/core/lib/src/fs/mod.rs
++++ b/core/lib/src/fs/mod.rs
+@@ -1,14 +1,21 @@
+ //! File serving, file accepting, and file metadata types.
+ 
++#[cfg(feature = "server")]
+ mod server;
++#[cfg(feature = "server")]
+ mod named_file;
++#[cfg(feature = "server")]
+ mod temp_file;
+ mod file_name;
+ 
++#[cfg(feature = "server")]
+ pub mod rewrite;
+ 
++#[cfg(feature = "server")]
+ pub use server::*;
++#[cfg(feature = "server")]
+ pub use named_file::*;
++#[cfg(feature = "server")]
+ pub use temp_file::*;
+ pub use file_name::*;
+ 
+diff --git a/core/lib/src/lib.rs b/core/lib/src/lib.rs
+index 8e629ed..769e247 100644
+--- a/core/lib/src/lib.rs
++++ b/core/lib/src/lib.rs
+@@ -158,11 +158,13 @@ pub mod mtls;
+ #[path = "rocket.rs"]
+ mod rkt;
+ mod util;
++#[cfg(feature = "server")]
+ mod server;
+ mod lifecycle;
+ mod state;
+ mod router;
+ mod phase;
++#[cfg(feature = "server")]
+ mod erased;
+ 
+ #[doc(inline)] pub use rocket_codegen::*;
+@@ -228,13 +230,26 @@ pub fn custom<T: figment::Provider>(provider: T) -> Rocket<Build> {
+ pub fn async_run<F, R>(fut: F, workers: usize, sync: usize, force_end: bool, name: &str) -> R
+     where F: std::future::Future<Output = R>
+ {
+-    let runtime = tokio::runtime::Builder::new_multi_thread()
+-        .thread_name(name)
+-        .worker_threads(workers)
+-        .max_blocking_threads(sync)
+-        .enable_all()
+-        .build()
+-        .expect("create tokio runtime");
++    #[cfg(feature = "server")]
++    let runtime = {
++        let _ = (workers, sync, name);
++        tokio::runtime::Builder::new_multi_thread()
++            .thread_name(name)
++            .worker_threads(workers)
++            .max_blocking_threads(sync)
++            .enable_all()
++            .build()
++            .expect("create tokio runtime")
++    };
++
++    #[cfg(not(feature = "server"))]
++    let runtime = {
++        let _ = (workers, sync, name);
++        tokio::runtime::Builder::new_current_thread()
++            .enable_all()
++            .build()
++            .expect("create tokio runtime")
++    };
+ 
+     let result = runtime.block_on(fut);
+     if force_end {
+@@ -357,6 +372,12 @@ pub fn execute<R, F>(future: F) -> R
+ 
+ /// Returns a future that evaluates to `true` exactly when there is a presently
+ /// running tokio async runtime that was likely started by Rocket.
++#[cfg(feature = "worker")]
++fn running_within_rocket_async_rt() -> impl std::future::Future<Output = bool> {
++    futures::future::ready(true)
++}
++
++#[cfg(not(feature = "worker"))]
+ fn running_within_rocket_async_rt() -> impl std::future::Future<Output = bool> {
+     use futures::FutureExt;
+ 
+diff --git a/core/lib/src/lifecycle.rs b/core/lib/src/lifecycle.rs
+index cf76e3b..63067bd 100644
+--- a/core/lib/src/lifecycle.rs
++++ b/core/lib/src/lifecycle.rs
+@@ -1,7 +1,9 @@
+ use futures::future::{FutureExt, Future};
+ 
+ use crate::trace::Trace;
++#[cfg(feature = "server")]
+ use crate::util::Formatter;
++#[cfg(feature = "server")]
+ use crate::data::IoHandler;
+ use crate::http::{Method, Status, Header};
+ use crate::outcome::Outcome;
+@@ -44,6 +46,22 @@ async fn catch_handle<Fut, T, F>(name: Option<&str>, run: F) -> Option<T>
+ }
+ 
+ impl Rocket<Orbit> {
++    /// Dispatches `request` and `data` directly into Rocket without using
++    /// Rocket's network server.
++    ///
++    /// This method is intended for custom transports such as WebAssembly hosts.
++    /// The caller is responsible for constructing the [`Request`] from
++    /// transport metadata and keeping it alive for as long as the returned
++    /// [`Response`] is used.
++    pub async fn dispatch_external<'r>(
++        &'r self,
++        request: &'r mut Request<'r>,
++        mut data: Data<'r>,
++    ) -> Response<'r> {
++        let token = self.preprocess(request, &mut data).await;
++        self.dispatch(token, request, data).await
++    }
++
+     /// Preprocess the request for Rocket things. Currently, this means:
+     ///
+     ///   * Rewriting the method in the request if _method form field exists.
+@@ -148,6 +166,7 @@ impl Rocket<Orbit> {
+             response.set_raw_header("Content-Length", size.to_string());
+         }
+ 
++        #[cfg(feature = "server")]
+         if let Some(alt_svc) = request.rocket().alt_svc() {
+             response.set_raw_header("Alt-Svc", alt_svc);
+         }
+@@ -156,6 +175,7 @@ impl Rocket<Orbit> {
+         response
+     }
+ 
++    #[cfg(feature = "server")]
+     pub(crate) fn extract_io_handler<'r>(
+         request: &'r Request<'_>,
+         response: &mut Response<'r>,
+diff --git a/core/lib/src/listener/endpoint.rs b/core/lib/src/listener/endpoint.rs
+index a9a49b1..5ca4977 100644
+--- a/core/lib/src/listener/endpoint.rs
++++ b/core/lib/src/listener/endpoint.rs
+@@ -305,7 +305,7 @@ impl PartialEq<Path> for Endpoint {
+     }
+ }
+ 
+-#[cfg(unix)]
++#[cfg(all(unix, feature = "server"))]
+ impl TryFrom<tokio::net::unix::SocketAddr> for Endpoint {
+     type Error = std::io::Error;
+ 
+diff --git a/core/lib/src/listener/mod.rs b/core/lib/src/listener/mod.rs
+index 5c8dff4..7e0bf7b 100644
+--- a/core/lib/src/listener/mod.rs
++++ b/core/lib/src/listener/mod.rs
+@@ -1,23 +1,34 @@
++#[cfg(feature = "server")]
+ mod cancellable;
++#[cfg(feature = "server")]
+ mod bounced;
++#[cfg(feature = "server")]
+ mod listener;
+ mod endpoint;
+ mod connection;
++#[cfg(feature = "server")]
+ mod bind;
++#[cfg(feature = "server")]
+ mod default;
+ 
+-#[cfg(unix)]
++#[cfg(all(unix, feature = "server"))]
+ #[cfg_attr(nightly, doc(cfg(unix)))]
+ pub mod unix;
++#[cfg(feature = "server")]
+ pub mod tcp;
+ #[cfg(feature = "http3-preview")]
+ pub mod quic;
+ 
+ pub use endpoint::*;
++#[cfg(feature = "server")]
+ pub use listener::*;
+ pub use connection::*;
++#[cfg(feature = "server")]
+ pub use bind::*;
++#[cfg(feature = "server")]
+ pub use default::*;
+ 
++#[cfg(feature = "server")]
+ pub(crate) use cancellable::*;
++#[cfg(feature = "server")]
+ pub(crate) use bounced::*;
+diff --git a/core/lib/src/local/mod.rs b/core/lib/src/local/mod.rs
+index bed689a..7c66cdc 100644
+--- a/core/lib/src/local/mod.rs
++++ b/core/lib/src/local/mod.rs
+@@ -184,4 +184,5 @@
+ #[macro_use] mod response;
+ 
+ pub mod asynchronous;
++#[cfg(feature = "server")]
+ pub mod blocking;
+diff --git a/core/lib/src/request/request.rs b/core/lib/src/request/request.rs
+index c281b55..96d2250 100644
+--- a/core/lib/src/request/request.rs
++++ b/core/lib/src/request/request.rs
+@@ -1,13 +1,16 @@
+ use std::{io, fmt};
+ use std::ops::RangeFrom;
+ use std::sync::{Arc, atomic::Ordering};
++#[cfg(feature = "server")]
+ use std::borrow::Cow;
++#[cfg(feature = "server")]
+ use std::str::FromStr;
+ use std::future::Future;
+ use std::net::IpAddr;
+ 
+-use http::Version;
+ use rocket_http::HttpVersion;
++#[cfg(feature = "server")]
++use http::Version;
+ use state::{TypeMap, InitCell};
+ use futures::future::BoxFuture;
+ use ref_swap::OptionRefSwap;
+@@ -18,8 +21,12 @@ use crate::form::{self, ValueField, FromForm};
+ use crate::data::Limits;
+ 
+ use crate::http::ProxyProto;
+-use crate::http::{Method, Header, HeaderMap, ContentType, Accept, MediaType, CookieJar, Cookie};
+-use crate::http::uri::{fmt::Path, Origin, Segments, Host, Authority};
++use crate::http::{Method, Header, HeaderMap, ContentType, Accept, MediaType, CookieJar};
++#[cfg(feature = "server")]
++use crate::http::Cookie;
++use crate::http::uri::{fmt::Path, Origin, Segments, Host};
++#[cfg(feature = "server")]
++use crate::http::uri::Authority;
+ use crate::listener::{Certificates, Endpoint};
+ 
+ /// The type of an incoming web request.
+@@ -89,8 +96,11 @@ impl Clone for RequestState<'_> {
+ 
+ impl<'r> Request<'r> {
+     /// Create a new `Request` with the given `method` and `uri`.
++    ///
++    /// This constructor is intended for transports and adapters that dispatch
++    /// directly into Rocket without using Rocket's network server.
+     #[inline(always)]
+-    pub(crate) fn new<'s: 'r>(
++    pub fn new<'s: 'r>(
+         rocket: &'r Rocket<Orbit>,
+         method: Method,
+         uri: Origin<'s>,
+@@ -1116,6 +1126,7 @@ impl<'r> Request<'r> {
+     }
+ 
+     /// Convert from Hyper types into a Rocket Request.
++    #[cfg(feature = "server")]
+     pub(crate) fn from_hyp(
+         rocket: &'r Rocket<Orbit>,
+         hyper: &'r hyper::http::request::Parts,
+@@ -1222,14 +1233,22 @@ impl<'r> Request<'r> {
+ 
+ #[derive(Debug, Clone)]
+ pub(crate) enum RequestError {
++    #[cfg(not(feature = "server"))]
++    Other,
++    #[cfg(feature = "server")]
+     InvalidUri(hyper::Uri),
++    #[cfg(feature = "server")]
+     BadMethod(hyper::Method),
+ }
+ 
+ impl fmt::Display for RequestError {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         match self {
++            #[cfg(not(feature = "server"))]
++            RequestError::Other => f.write_str("request error"),
++            #[cfg(feature = "server")]
+             RequestError::InvalidUri(u) => write!(f, "invalid origin URI: {}", u),
++            #[cfg(feature = "server")]
+             RequestError::BadMethod(m) => write!(f, "invalid or unrecognized method: {}", m),
+         }
+     }
+diff --git a/core/lib/src/response/responder.rs b/core/lib/src/response/responder.rs
+index f31262c..bba21a7 100644
+--- a/core/lib/src/response/responder.rs
++++ b/core/lib/src/response/responder.rs
+@@ -1,6 +1,7 @@
+-use std::fs::File;
+ use std::io::Cursor;
+ use std::sync::Arc;
++#[cfg(feature = "server")]
++use std::fs::File;
+ 
+ use crate::http::{Status, ContentType, StatusClass};
+ use crate::response::{self, Response};
+@@ -445,6 +446,7 @@ impl<'r, 'o: 'r, T: Responder<'r, 'o> + Sized> Responder<'r, 'o> for Box<T> {
+ }
+ 
+ /// Returns a response with a sized body for the file. Always returns `Ok`.
++#[cfg(feature = "server")]
+ impl<'r> Responder<'r, 'static> for File {
+     fn respond_to(self, req: &'r Request<'_>) -> response::Result<'static> {
+         tokio::fs::File::from(self).respond_to(req)
+@@ -452,6 +454,7 @@ impl<'r> Responder<'r, 'static> for File {
+ }
+ 
+ /// Returns a response with a sized body for the file. Always returns `Ok`.
++#[cfg(feature = "server")]
+ impl<'r> Responder<'r, 'static> for tokio::fs::File {
+     fn respond_to(self, _: &'r Request<'_>) -> response::Result<'static> {
+         Response::build().sized_body(None, self).ok()
+diff --git a/core/lib/src/rocket.rs b/core/lib/src/rocket.rs
+index 5762ed4..e839c56 100644
+--- a/core/lib/src/rocket.rs
++++ b/core/lib/src/rocket.rs
+@@ -2,18 +2,23 @@ use std::fmt;
+ use std::ops::{Deref, DerefMut};
+ use std::sync::Arc;
+ use std::time::Duration;
++#[cfg(feature = "server")]
+ use std::any::Any;
++#[cfg(feature = "server")]
+ use std::future::Future;
+ use std::panic::Location;
+ 
+ use either::Either;
+ use figment::{Figment, Provider};
++#[cfg(feature = "server")]
+ use futures::TryFutureExt;
+ 
+ use crate::shutdown::{Stages, Shutdown};
+ use crate::trace::{Trace, TraceAll};
+ use crate::{sentinel, shield::Shield, Catcher, Config, Route};
+-use crate::listener::{Bind, DefaultListener, Endpoint, Listener};
++use crate::listener::Endpoint;
++#[cfg(feature = "server")]
++use crate::listener::{Bind, DefaultListener, Listener};
+ use crate::router::Router;
+ use crate::fairing::{Fairing, Fairings};
+ use crate::phase::{Phase, Build, Building, Ignite, Igniting, Orbit, Orbiting};
+@@ -666,6 +671,7 @@ impl Rocket<Ignite> {
+         rocket
+     }
+ 
++    #[cfg(feature = "server")]
+     async fn _launch<L: Listener + 'static>(self, listener: L) -> Result<Rocket<Ignite>, Error> {
+         let rocket = self.listen_and_serve(listener, |rocket| async move {
+             let rocket = Arc::new(rocket);
+@@ -1137,6 +1143,21 @@ impl<P: Phase> Rocket<P> {
+         Ok(self.into_ignite().await?._local_launch(e).await)
+     }
+ 
++    /// Transitions this instance of `Rocket` from any phase into the _orbit_
++    /// phase without binding a network listener.
++    ///
++    /// This is intended for external transports and adapters that receive
++    /// requests outside of Rocket's built-in server and dispatch them directly
++    /// with [`Rocket::dispatch_external()`].
++    ///
++    /// In addition to all of the processes that occur during
++    /// [ignition](Rocket::ignite()), a successful external orbit runs
++    /// _liftoff_ fairings before returning.
++    pub async fn orbit_external(self) -> Result<Rocket<Orbit>, Error> {
++        let endpoint = Endpoint::new("external transport");
++        Ok(self.into_ignite().await?._local_launch(endpoint).await)
++    }
++
+     /// Returns a `Future` that transitions this instance of `Rocket` from any
+     /// phase into the _orbit_ phase. When `await`ed, the future drives the
+     /// server forward, listening for and dispatching requests to mounted routes
+@@ -1181,10 +1202,12 @@ impl<P: Phase> Rocket<P> {
+     ///     println!("Rocket: deorbit.");
+     /// }
+     /// ```
++    #[cfg(feature = "server")]
+     pub async fn launch(self) -> Result<Rocket<Ignite>, Error> {
+         self.launch_with::<DefaultListener>().await
+     }
+ 
++    #[cfg(feature = "server")]
+     pub async fn launch_with<B: Bind>(self) -> Result<Rocket<Ignite>, Error> {
+         let rocket = self.into_ignite().await?;
+         let bind_endpoint = B::bind_endpoint(&rocket).ok();
+@@ -1208,6 +1231,7 @@ impl<P: Phase> Rocket<P> {
+         }
+     }
+ 
++    #[cfg(feature = "server")]
+     pub async fn try_launch_on<L, F, E>(self, listener: F) -> Result<Rocket<Ignite>, Error>
+         where L: Listener + 'static,
+               F: Future<Output = Result<L, E>>,
+@@ -1217,6 +1241,7 @@ impl<P: Phase> Rocket<P> {
+         self.into_ignite().await?._launch(listener).await
+     }
+ 
++    #[cfg(feature = "server")]
+     pub async fn launch_on<L>(self, listener: L) -> Result<Rocket<Ignite>, Error>
+         where L: Listener + 'static,
+     {
+diff --git a/core/lib/src/shutdown/config.rs b/core/lib/src/shutdown/config.rs
+index fc05728..60099bb 100644
+--- a/core/lib/src/shutdown/config.rs
++++ b/core/lib/src/shutdown/config.rs
+@@ -2,9 +2,11 @@
+ use std::collections::HashSet;
+ use std::time::Duration;
+ 
++#[cfg(feature = "server")]
+ use futures::stream::Stream;
+ use serde::{Deserialize, Serialize};
+ 
++#[cfg(unix)]
+ use crate::shutdown::Sig;
+ 
+ /// Graceful shutdown configuration.
+@@ -230,7 +232,7 @@ impl ShutdownConfig {
+         Duration::from_secs(self.mercy as u64)
+     }
+ 
+-    #[cfg(unix)]
++    #[cfg(all(unix, feature = "server"))]
+     pub(crate) fn signal_stream(&self) -> Option<impl Stream<Item = Sig>> {
+         use tokio_stream::{StreamExt, StreamMap, wrappers::SignalStream};
+         use tokio::signal::unix::{signal, SignalKind};
+@@ -268,7 +270,7 @@ impl ShutdownConfig {
+         Some(map.map(|(k, _)| k))
+     }
+ 
+-    #[cfg(not(unix))]
++    #[cfg(all(not(unix), feature = "server"))]
+     pub(crate) fn signal_stream(&self) -> Option<impl Stream<Item = Sig>> {
+         use tokio_stream::StreamExt;
+         use futures::stream::once;
+diff --git a/core/lib/src/shutdown/handle.rs b/core/lib/src/shutdown/handle.rs
+index 1b11366..fc8407f 100644
+--- a/core/lib/src/shutdown/handle.rs
++++ b/core/lib/src/shutdown/handle.rs
+@@ -2,9 +2,13 @@ use std::future::Future;
+ use std::task::{Context, Poll};
+ use std::pin::Pin;
+ 
+-use futures::{FutureExt, StreamExt};
++use futures::FutureExt;
++#[cfg(feature = "server")]
++use futures::StreamExt;
+ 
+-use crate::shutdown::{ShutdownConfig, TripWire};
++use crate::shutdown::TripWire;
++#[cfg(feature = "server")]
++use crate::shutdown::ShutdownConfig;
+ use crate::request::{FromRequest, Outcome, Request};
+ 
+ /// A request guard and future for graceful shutdown.
+@@ -153,6 +157,7 @@ impl Stages {
+         }
+     }
+ 
++    #[cfg(feature = "server")]
+     pub(crate) fn spawn_listener(&self, config: &ShutdownConfig) {
+         use futures::stream;
+         use futures::future::{select, Either};
+diff --git a/core/lib/src/trace/traceable.rs b/core/lib/src/trace/traceable.rs
+index 9ef1d42..4094453 100644
+--- a/core/lib/src/trace/traceable.rs
++++ b/core/lib/src/trace/traceable.rs
+@@ -295,6 +295,7 @@ impl Trace for ErrorKind {
+     fn trace(&self, level: Level) {
+         use ErrorKind::*;
+ 
++        #[cfg(feature = "server")]
+         fn try_downcast<'a, T>(error: &'a (dyn StdError + 'static)) -> Option<&'a T>
+             where T: StdError + 'static
+         {
+@@ -302,6 +303,7 @@ impl Trace for ErrorKind {
+         }
+ 
+         match self {
++            #[cfg(feature = "server")]
+             Bind(endpoint, error) => {
+                 if let Some(e) = try_downcast::<crate::Error>(&**error) {
+                     e.trace(level);
+@@ -352,7 +354,9 @@ impl Trace for ErrorKind {
+                 "secrets enabled in a non-debug profile without a stable `secret_key`\n\
+                 disable the `secrets` feature or configure a `secret_key`"
+             ),
++            #[cfg(feature = "server")]
+             Liftoff(_, reason) => event!(level, "panic", %reason, "liftoff fairing failed"),
++            #[cfg(feature = "server")]
+             Shutdown(_) => event!(level, "shutdown", "shutdown failed"),
+         }
+     }
+diff --git a/core/lib/src/util/mod.rs b/core/lib/src/util/mod.rs
+index 2c6b234..fa631e4 100644
+--- a/core/lib/src/util/mod.rs
++++ b/core/lib/src/util/mod.rs
+@@ -1,4 +1,5 @@
+ mod chain;
++#[cfg(feature = "server")]
+ mod reader_stream;
+ mod join;
+ 
+@@ -6,6 +7,7 @@ mod join;
+ pub mod unix;
+ 
+ pub use chain::Chain;
++#[cfg(feature = "server")]
+ pub use reader_stream::ReaderStream;
+ pub use join::join;
+ 
+@@ -71,4 +73,5 @@ macro_rules! for_both {
+     };
+ }
+ 
++#[cfg(feature = "server")]
+ pub use for_both;
