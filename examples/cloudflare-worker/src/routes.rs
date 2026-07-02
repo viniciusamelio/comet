@@ -1,7 +1,8 @@
+use comet::cloudflare::{BindingName, D1, QueueBinding};
 use rocket::serde::json::Json;
-use rocket::{Build, Rocket, State};
+use rocket::{Build, Rocket};
 use wasm_bindgen::JsValue;
-use worker::{D1Database, Env};
+use worker::Env;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{NewTask, Task, TaskEvent, TaskEventKind, TaskRow};
@@ -13,13 +14,24 @@ const INSERT_TASK_QUERY: &str =
 const COMPLETE_TASK_QUERY: &str =
     "UPDATE tasks SET done = 1 WHERE id = ?1 RETURNING id, title, done, created_at";
 
-fn database(env: &Env) -> ApiResult<D1Database> {
-    env.d1("DB").map_err(ApiError::from)
+pub struct DB;
+
+impl BindingName for DB {
+    const NAME: &'static str = "DB";
 }
 
-async fn publish_task_event(env: &Env, task_id: i32, kind: TaskEventKind) -> ApiResult<()> {
-    env.queue("TASK_EVENTS")
-        .map_err(ApiError::from)?
+pub struct TaskEvents;
+
+impl BindingName for TaskEvents {
+    const NAME: &'static str = "TASK_EVENTS";
+}
+
+async fn publish_task_event(
+    queue: &QueueBinding<TaskEvents>,
+    task_id: i32,
+    kind: TaskEventKind,
+) -> ApiResult<()> {
+    queue
         .send(TaskEvent { task_id, kind })
         .await
         .map_err(ApiError::from)
@@ -53,9 +65,9 @@ pub fn stream_demo() -> rocket::response::stream::ByteStream<impl rocket::future
 }
 
 #[get("/tasks")]
-pub async fn list_tasks(env: &State<Env>) -> ApiResult<Json<Vec<Task>>> {
-    comet::cloudflare::local(async {
-        let rows = database(env)?
+pub async fn list_tasks(db: D1<DB>) -> ApiResult<Json<Vec<Task>>> {
+    comet::cloudflare::local(async move {
+        let rows = db
             .prepare(TASKS_QUERY)
             .all()
             .await
@@ -69,9 +81,9 @@ pub async fn list_tasks(env: &State<Env>) -> ApiResult<Json<Vec<Task>>> {
 }
 
 #[get("/tasks/<id>")]
-pub async fn get_task(id: i32, env: &State<Env>) -> ApiResult<Json<Task>> {
+pub async fn get_task(id: i32, db: D1<DB>) -> ApiResult<Json<Task>> {
     comet::cloudflare::local(async move {
-        let row = database(env)?
+        let row = db
             .prepare(TASK_BY_ID_QUERY)
             .bind(&[JsValue::from(id)])
             .map_err(ApiError::from)?
@@ -86,13 +98,17 @@ pub async fn get_task(id: i32, env: &State<Env>) -> ApiResult<Json<Task>> {
 }
 
 #[post("/tasks", data = "<new_task>")]
-pub async fn create_task(new_task: Json<NewTask>, env: &State<Env>) -> ApiResult<Json<Task>> {
+pub async fn create_task(
+    new_task: Json<NewTask>,
+    db: D1<DB>,
+    queue: QueueBinding<TaskEvents>,
+) -> ApiResult<Json<Task>> {
     comet::cloudflare::local(async move {
         let title = new_task
             .validated_title()
             .map_err(|message| ApiError::BadRequest(message.to_string()))?;
 
-        let row = database(env)?
+        let row = db
             .prepare(INSERT_TASK_QUERY)
             .bind(&[JsValue::from(title)])
             .map_err(ApiError::from)?
@@ -102,7 +118,7 @@ pub async fn create_task(new_task: Json<NewTask>, env: &State<Env>) -> ApiResult
             .ok_or_else(|| ApiError::BadRequest("insert did not return a row".to_string()))?;
 
         let task: Task = row.into();
-        publish_task_event(env, task.id, TaskEventKind::Created).await?;
+        publish_task_event(&queue, task.id, TaskEventKind::Created).await?;
 
         Ok(Json(task))
     })
@@ -110,9 +126,13 @@ pub async fn create_task(new_task: Json<NewTask>, env: &State<Env>) -> ApiResult
 }
 
 #[post("/tasks/<id>/complete")]
-pub async fn complete_task(id: i32, env: &State<Env>) -> ApiResult<Json<Task>> {
+pub async fn complete_task(
+    id: i32,
+    db: D1<DB>,
+    queue: QueueBinding<TaskEvents>,
+) -> ApiResult<Json<Task>> {
     comet::cloudflare::local(async move {
-        let row = database(env)?
+        let row = db
             .prepare(COMPLETE_TASK_QUERY)
             .bind(&[JsValue::from(id)])
             .map_err(ApiError::from)?
@@ -122,7 +142,7 @@ pub async fn complete_task(id: i32, env: &State<Env>) -> ApiResult<Json<Task>> {
             .ok_or(ApiError::NotFound)?;
 
         let task: Task = row.into();
-        publish_task_event(env, task.id, TaskEventKind::Completed).await?;
+        publish_task_event(&queue, task.id, TaskEventKind::Completed).await?;
 
         Ok(Json(task))
     })

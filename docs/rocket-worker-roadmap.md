@@ -1,7 +1,7 @@
 # Rocket on Cloudflare Workers Roadmap
 
-This repository starts with a native proof of concept: `RocketWorker` receives a
-Worker-shaped request, dispatches it through Rocket's local async client, and
+This repository started with a native proof of concept: `RocketWorker` receives
+a Worker-shaped request, dispatches it through Rocket's local async client, and
 returns a Worker-shaped response.
 
 The prototype validates the important framework behavior first:
@@ -14,7 +14,7 @@ The prototype validates the important framework behavior first:
 
 ## Current Shape
 
-The current adapter is intentionally buffered:
+The native-client adapter is still intentionally buffered:
 
 ```rust
 let app = rocket::build().mount("/", rocket::routes![index]);
@@ -22,8 +22,18 @@ let worker = RocketWorker::new(app).await?;
 let response = worker.dispatch(WorkerRequest::get("/")).await?;
 ```
 
-This is not the final Cloudflare Worker implementation. It is the smallest
-dispatch model that proves Rocket can sit behind a fetch-style transport.
+The Cloudflare adapter is no longer just that proof of concept. It now:
+
+- converts `worker::Request` into Rocket request metadata
+- streams Worker request bodies into Rocket `Data`
+- dispatches directly through patched Rocket's `dispatch_external()`
+- streams large or unknown-size Rocket response bodies back to Workers
+- buffers known small response bodies to avoid the streaming machinery
+- can cache an already-ignited `Rocket<Orbit>` per Worker isolate with
+  `serve_cached(req, || rocket(env))`
+
+The remaining work is tracked task-by-task in
+[`docs/worker-implementation-tracker.md`](worker-implementation-tracker.md).
 
 ## Target Shape
 
@@ -56,9 +66,16 @@ fn rocket() -> rocket::Rocket<rocket::Build> {
     rocket::build().mount("/", routes![index])
 }
 
+static ROCKET: comet::cloudflare::FetchApp =
+    comet::cloudflare::FetchApp::new(|_env, _ctx| rocket());
+
 #[event(fetch)]
-async fn main(req: worker::Request, _env: worker::Env, _ctx: worker::Context) -> worker::Result<worker::Response> {
-    comet::cloudflare::serve(req, rocket()).await
+async fn main(
+    req: worker::Request,
+    env: worker::Env,
+    ctx: worker::Context,
+) -> worker::Result<worker::Response> {
+    ROCKET.fetch(req, env, ctx).await
 }
 ```
 
@@ -231,7 +248,7 @@ Rocket's local client or server launch path.
    An earlier version of this doc proposed solving the `'static` requirement
    with `wasm_bindgen_futures::spawn_local` + an `mpsc` channel; that turned
    out to be unnecessary complexity. What's actually there: the whole
-   dispatch — igniting Rocket, building the request, running
+   dispatch — using an already-ignited Rocket when available, building the request, running
    `dispatch_external()`, then looping over `body_mut().read()` — is one
    `async_stream::try_stream!` block (Rocket already depends on `async-stream`
    for its own `response::stream` module, re-exported as `rocket::async_stream`).
@@ -244,7 +261,10 @@ Rocket's local client or server launch path.
    guarantee that oneshot has already fired, splices the possible first chunk
    back onto the front with `stream::iter(..).chain(..)`, and returns a
    `WorkerResponse` with the now-known status/headers and the remainder as a
-   `WorkerBody::Streamed`.
+   `WorkerBody::Streamed`. If the response body has a known preset size at or
+   below the small-body threshold, the adapter reads it directly into
+   `WorkerBody::Buffered` instead of allocating the 64KiB streaming scratch
+   buffer.
 
    Streaming *responses* built with Rocket's own `response::stream` module
    (`ByteStream!`/`TextStream!`/etc.) that await a `worker` primitive between
@@ -274,3 +294,11 @@ Rocket's local client or server launch path.
      until a separate storage-backed design exists.
    - Handle WebSockets with Cloudflare's Worker WebSocket APIs, not Hyper
      upgrades.
+
+## Execution Tracking
+
+Implementation progress for the remaining roadmap is tracked in
+[`docs/worker-implementation-tracker.md`](worker-implementation-tracker.md).
+Every task there has an ID, status, owner field, target files, and completion
+criteria so multiple agents can coordinate without relying on conversation
+history.

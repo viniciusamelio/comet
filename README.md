@@ -24,9 +24,15 @@ fn rocket(env: Env) -> rocket::Rocket<rocket::Build> {
     rocket::build().manage(env).mount("/", routes![index])
 }
 
+static ROCKET: comet::cloudflare::FetchApp = comet::cloudflare::FetchApp::new(build_rocket);
+
+fn build_rocket(env: Env, _ctx: Context) -> rocket::Rocket<rocket::Build> {
+    rocket(env)
+}
+
 #[event(fetch)]
-pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    comet::cloudflare::serve_cached(req, || rocket(env)).await
+pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
+    ROCKET.fetch(req, env, ctx).await
 }
 ```
 
@@ -48,7 +54,10 @@ works today:
   an exact round-trip. See "Streaming adapter" in
   [the roadmap](docs/rocket-worker-roadmap.md) for how.
 - JSON data guards and responders.
-- Cloudflare bindings (`Env`, D1, Queues) via Rocket managed state —
+- Cloudflare bindings (`Env`, D1, Queues, KV, R2, service bindings, and
+  Hyperdrive) via Rocket managed state — `comet::cloudflare::D1`,
+  `QueueBinding`, `Kv`, `R2Bucket`, `ServiceBinding`, and `Hyperdrive`
+  provide typed request guards for named bindings, while
   `comet::cloudflare::local()`/`local_stream()` bridge Rocket's `Future +
   Send` route dispatch (and `Send`-bound streaming responders) with the
   `!Send` futures/streams that `worker` calls resolve through.
@@ -96,8 +105,11 @@ the consumer's side.
 - `native-client` (default): a `RocketWorker` that dispatches
   `WorkerRequest`/`WorkerResponse` through Rocket's local async client.
   Useful for testing the request/response shapes without a `worker` runtime.
-- `cloudflare`: the `comet::cloudflare` module — `serve()`, the `Application`
-  impl for `Rocket<Build>`, and `local()`. Requires `worker`.
+- `cloudflare`: the `comet::cloudflare` module — `FetchApp`, `serve()`, the
+  `Application` impl for `Rocket<Build>`, and `local()`. Requires `worker`.
+- `cloudflare-d1`, `cloudflare-queue`, `cloudflare-kv`, `cloudflare-r2`,
+  `cloudflare-service`, `cloudflare-hyperdrive`: typed request guards for the
+  corresponding Cloudflare bindings.
 
 ## Development
 

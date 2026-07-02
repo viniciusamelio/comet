@@ -108,17 +108,21 @@ pub struct WorkerResponse {
 #[cfg(feature = "cloudflare")]
 pub mod cloudflare {
     use std::future::Future;
+    use std::marker::PhantomData;
+    use std::ops::Deref;
     use std::pin::Pin;
 
     use bytes::Bytes;
     use futures_util::StreamExt;
+    use rocket::http::Status;
     use rocket::http::uri::Origin;
     use rocket::http::{Header, Method};
+    use rocket::request::{FromRequest, Outcome};
     use rocket::tokio::io::AsyncReadExt;
     use rocket::{Build, Orbit, Rocket};
     use std::cell::RefCell;
     use std::rc::Rc;
-    use worker::{Error, Headers, Request, Response, Result};
+    use worker::{Context, Env, Error, Headers, Request, Response, Result};
 
     use crate::{AdapterError, BoxedByteStream, WorkerBody, WorkerRequest, WorkerResponse};
 
@@ -186,10 +190,405 @@ pub mod cloudflare {
         send_wrapper::SendWrapper::new(stream)
     }
 
+    /// Names a Cloudflare binding for typed request guards.
+    ///
+    /// Define a zero-sized marker type per binding:
+    ///
+    /// ```ignore
+    /// struct DB;
+    ///
+    /// impl comet::cloudflare::BindingName for DB {
+    ///     const NAME: &'static str = "DB";
+    /// }
+    /// ```
+    pub trait BindingName {
+        const NAME: &'static str;
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    pub enum BindingError {
+        #[error("worker Env is not managed by Rocket")]
+        MissingEnv,
+        #[error("failed to load binding `{name}`: {source}")]
+        Worker { name: &'static str, source: Error },
+    }
+
+    #[cfg(feature = "cloudflare-d1")]
+    #[derive(Debug)]
+    pub struct D1<B: BindingName> {
+        database: worker::D1Database,
+        _binding: PhantomData<B>,
+    }
+
+    #[cfg(feature = "cloudflare-d1")]
+    impl<B: BindingName> D1<B> {
+        pub fn into_inner(self) -> worker::D1Database {
+            self.database
+        }
+    }
+
+    #[cfg(feature = "cloudflare-d1")]
+    impl<B: BindingName> Deref for D1<B> {
+        type Target = worker::D1Database;
+
+        fn deref(&self) -> &Self::Target {
+            &self.database
+        }
+    }
+
+    #[cfg(feature = "cloudflare-d1")]
+    #[rocket::async_trait]
+    impl<'r, B> FromRequest<'r> for D1<B>
+    where
+        B: BindingName + Send + Sync + 'static,
+    {
+        type Error = BindingError;
+
+        async fn from_request(request: &'r rocket::Request<'_>) -> Outcome<Self, Self::Error> {
+            let Some(env) = request.rocket().state::<Env>() else {
+                return Outcome::Error((Status::InternalServerError, BindingError::MissingEnv));
+            };
+
+            match env.d1(B::NAME) {
+                Ok(database) => Outcome::Success(Self {
+                    database,
+                    _binding: PhantomData,
+                }),
+                Err(source) => Outcome::Error((
+                    Status::InternalServerError,
+                    BindingError::Worker {
+                        name: B::NAME,
+                        source,
+                    },
+                )),
+            }
+        }
+    }
+
+    #[cfg(feature = "cloudflare-queue")]
+    #[derive(Debug)]
+    pub struct QueueBinding<B: BindingName> {
+        queue: worker::Queue,
+        _binding: PhantomData<B>,
+    }
+
+    #[cfg(feature = "cloudflare-queue")]
+    impl<B: BindingName> QueueBinding<B> {
+        pub fn into_inner(self) -> worker::Queue {
+            self.queue
+        }
+    }
+
+    #[cfg(feature = "cloudflare-queue")]
+    impl<B: BindingName> Deref for QueueBinding<B> {
+        type Target = worker::Queue;
+
+        fn deref(&self) -> &Self::Target {
+            &self.queue
+        }
+    }
+
+    #[cfg(feature = "cloudflare-queue")]
+    #[rocket::async_trait]
+    impl<'r, B> FromRequest<'r> for QueueBinding<B>
+    where
+        B: BindingName + Send + Sync + 'static,
+    {
+        type Error = BindingError;
+
+        async fn from_request(request: &'r rocket::Request<'_>) -> Outcome<Self, Self::Error> {
+            let Some(env) = request.rocket().state::<Env>() else {
+                return Outcome::Error((Status::InternalServerError, BindingError::MissingEnv));
+            };
+
+            match env.queue(B::NAME) {
+                Ok(queue) => Outcome::Success(Self {
+                    queue,
+                    _binding: PhantomData,
+                }),
+                Err(source) => Outcome::Error((
+                    Status::InternalServerError,
+                    BindingError::Worker {
+                        name: B::NAME,
+                        source,
+                    },
+                )),
+            }
+        }
+    }
+
+    #[cfg(feature = "cloudflare-kv")]
+    #[derive(Debug)]
+    pub struct Kv<B: BindingName> {
+        store: worker::kv::KvStore,
+        _binding: PhantomData<B>,
+    }
+
+    #[cfg(feature = "cloudflare-kv")]
+    impl<B: BindingName> Kv<B> {
+        pub fn into_inner(self) -> worker::kv::KvStore {
+            self.store
+        }
+    }
+
+    #[cfg(feature = "cloudflare-kv")]
+    impl<B: BindingName> Deref for Kv<B> {
+        type Target = worker::kv::KvStore;
+
+        fn deref(&self) -> &Self::Target {
+            &self.store
+        }
+    }
+
+    #[cfg(feature = "cloudflare-kv")]
+    #[rocket::async_trait]
+    impl<'r, B> FromRequest<'r> for Kv<B>
+    where
+        B: BindingName + Send + Sync + 'static,
+    {
+        type Error = BindingError;
+
+        async fn from_request(request: &'r rocket::Request<'_>) -> Outcome<Self, Self::Error> {
+            let Some(env) = request.rocket().state::<Env>() else {
+                return Outcome::Error((Status::InternalServerError, BindingError::MissingEnv));
+            };
+
+            match env.kv(B::NAME) {
+                Ok(store) => Outcome::Success(Self {
+                    store,
+                    _binding: PhantomData,
+                }),
+                Err(source) => Outcome::Error((
+                    Status::InternalServerError,
+                    BindingError::Worker {
+                        name: B::NAME,
+                        source,
+                    },
+                )),
+            }
+        }
+    }
+
+    #[cfg(feature = "cloudflare-r2")]
+    #[derive(Debug)]
+    pub struct R2Bucket<B: BindingName> {
+        bucket: worker::Bucket,
+        _binding: PhantomData<B>,
+    }
+
+    #[cfg(feature = "cloudflare-r2")]
+    // Workers wasm is single-threaded; this mirrors `worker`'s own Send/Sync
+    // impls for other JS-backed bindings so Rocket's Send-bound route futures
+    // can carry the guard.
+    unsafe impl<B> Send for R2Bucket<B> where B: BindingName + Send {}
+
+    #[cfg(feature = "cloudflare-r2")]
+    // See the Send impl above.
+    unsafe impl<B> Sync for R2Bucket<B> where B: BindingName + Sync {}
+
+    #[cfg(feature = "cloudflare-r2")]
+    impl<B: BindingName> R2Bucket<B> {
+        pub fn into_inner(self) -> worker::Bucket {
+            self.bucket
+        }
+    }
+
+    #[cfg(feature = "cloudflare-r2")]
+    impl<B: BindingName> Deref for R2Bucket<B> {
+        type Target = worker::Bucket;
+
+        fn deref(&self) -> &Self::Target {
+            &self.bucket
+        }
+    }
+
+    #[cfg(feature = "cloudflare-r2")]
+    #[rocket::async_trait]
+    impl<'r, B> FromRequest<'r> for R2Bucket<B>
+    where
+        B: BindingName + Send + Sync + 'static,
+    {
+        type Error = BindingError;
+
+        async fn from_request(request: &'r rocket::Request<'_>) -> Outcome<Self, Self::Error> {
+            let Some(env) = request.rocket().state::<Env>() else {
+                return Outcome::Error((Status::InternalServerError, BindingError::MissingEnv));
+            };
+
+            match env.bucket(B::NAME) {
+                Ok(bucket) => Outcome::Success(Self {
+                    bucket,
+                    _binding: PhantomData,
+                }),
+                Err(source) => Outcome::Error((
+                    Status::InternalServerError,
+                    BindingError::Worker {
+                        name: B::NAME,
+                        source,
+                    },
+                )),
+            }
+        }
+    }
+
+    #[cfg(feature = "cloudflare-service")]
+    #[derive(Debug)]
+    pub struct ServiceBinding<B: BindingName> {
+        fetcher: worker::Fetcher,
+        _binding: PhantomData<B>,
+    }
+
+    #[cfg(feature = "cloudflare-service")]
+    // Workers wasm is single-threaded; this mirrors `worker`'s own Send/Sync
+    // impls for other JS-backed bindings so Rocket's Send-bound route futures
+    // can carry the guard.
+    unsafe impl<B> Send for ServiceBinding<B> where B: BindingName + Send {}
+
+    #[cfg(feature = "cloudflare-service")]
+    // See the Send impl above.
+    unsafe impl<B> Sync for ServiceBinding<B> where B: BindingName + Sync {}
+
+    #[cfg(feature = "cloudflare-service")]
+    impl<B: BindingName> ServiceBinding<B> {
+        pub fn into_inner(self) -> worker::Fetcher {
+            self.fetcher
+        }
+    }
+
+    #[cfg(feature = "cloudflare-service")]
+    impl<B: BindingName> Deref for ServiceBinding<B> {
+        type Target = worker::Fetcher;
+
+        fn deref(&self) -> &Self::Target {
+            &self.fetcher
+        }
+    }
+
+    #[cfg(feature = "cloudflare-service")]
+    #[rocket::async_trait]
+    impl<'r, B> FromRequest<'r> for ServiceBinding<B>
+    where
+        B: BindingName + Send + Sync + 'static,
+    {
+        type Error = BindingError;
+
+        async fn from_request(request: &'r rocket::Request<'_>) -> Outcome<Self, Self::Error> {
+            let Some(env) = request.rocket().state::<Env>() else {
+                return Outcome::Error((Status::InternalServerError, BindingError::MissingEnv));
+            };
+
+            match env.service(B::NAME) {
+                Ok(fetcher) => Outcome::Success(Self {
+                    fetcher,
+                    _binding: PhantomData,
+                }),
+                Err(source) => Outcome::Error((
+                    Status::InternalServerError,
+                    BindingError::Worker {
+                        name: B::NAME,
+                        source,
+                    },
+                )),
+            }
+        }
+    }
+
+    #[cfg(feature = "cloudflare-hyperdrive")]
+    #[derive(Debug)]
+    pub struct Hyperdrive<B: BindingName> {
+        hyperdrive: worker::Hyperdrive,
+        _binding: PhantomData<B>,
+    }
+
+    #[cfg(feature = "cloudflare-hyperdrive")]
+    impl<B: BindingName> Hyperdrive<B> {
+        pub fn into_inner(self) -> worker::Hyperdrive {
+            self.hyperdrive
+        }
+    }
+
+    #[cfg(feature = "cloudflare-hyperdrive")]
+    impl<B: BindingName> Deref for Hyperdrive<B> {
+        type Target = worker::Hyperdrive;
+
+        fn deref(&self) -> &Self::Target {
+            &self.hyperdrive
+        }
+    }
+
+    #[cfg(feature = "cloudflare-hyperdrive")]
+    #[rocket::async_trait]
+    impl<'r, B> FromRequest<'r> for Hyperdrive<B>
+    where
+        B: BindingName + Send + Sync + 'static,
+    {
+        type Error = BindingError;
+
+        async fn from_request(request: &'r rocket::Request<'_>) -> Outcome<Self, Self::Error> {
+            let Some(env) = request.rocket().state::<Env>() else {
+                return Outcome::Error((Status::InternalServerError, BindingError::MissingEnv));
+            };
+
+            match env.hyperdrive(B::NAME) {
+                Ok(hyperdrive) => Outcome::Success(Self {
+                    hyperdrive,
+                    _binding: PhantomData,
+                }),
+                Err(source) => Outcome::Error((
+                    Status::InternalServerError,
+                    BindingError::Worker {
+                        name: B::NAME,
+                        source,
+                    },
+                )),
+            }
+        }
+    }
+
     pub async fn serve<A: Application>(mut req: Request, app: A) -> Result<Response> {
         let request = request_from_worker(&mut req).await?;
         let response = app.dispatch(request).await?;
         response_to_worker(response)
+    }
+
+    /// A reusable Cloudflare Worker fetch adapter backed by Rocket.
+    ///
+    /// Store this in a `static` and call [`WorkerFetchApp::fetch()`] from the
+    /// `#[event(fetch)]` handler:
+    ///
+    /// ```ignore
+    /// static ROCKET: comet::cloudflare::FetchApp =
+    ///     comet::cloudflare::FetchApp::new(|env, _ctx| rocket(env));
+    ///
+    /// #[event(fetch)]
+    /// async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
+    ///     ROCKET.fetch(req, env, ctx).await
+    /// }
+    /// ```
+    ///
+    /// The builder is only called on this isolate's first request. Subsequent
+    /// requests reuse the already-ignited `Rocket<Orbit>`.
+    pub struct WorkerFetchApp<F> {
+        build_rocket: F,
+    }
+
+    /// The common `static` app shape: a function pointer that receives the
+    /// per-request Worker `Env` and `Context` and builds `Rocket<Build>`.
+    pub type FetchApp = WorkerFetchApp<fn(Env, Context) -> Rocket<Build>>;
+
+    impl FetchApp {
+        pub const fn new(build_rocket: fn(Env, Context) -> Rocket<Build>) -> Self {
+            WorkerFetchApp { build_rocket }
+        }
+    }
+
+    impl<F> WorkerFetchApp<F>
+    where
+        F: Fn(Env, Context) -> Rocket<Build>,
+    {
+        pub async fn fetch(&self, req: Request, env: Env, ctx: Context) -> Result<Response> {
+            serve_cached(req, || (self.build_rocket)(env, ctx)).await
+        }
     }
 
     thread_local! {
@@ -485,6 +884,13 @@ pub mod cloudflare {
         }
 
         fn assert_send<T: Send>(_: T) {}
+        fn assert_send_sync_type<T: Send + Sync>() {}
+
+        struct TestBinding;
+
+        impl super::BindingName for TestBinding {
+            const NAME: &'static str = "TEST_BINDING";
+        }
 
         #[rocket::get("/small")]
         fn small() -> &'static str {
@@ -573,6 +979,22 @@ pub mod cloudflare {
                 WorkerBody::Buffered(_) => panic!("expected large body to remain streamed"),
                 WorkerBody::Streamed(_) => {}
             }
+        }
+
+        #[test]
+        fn binding_guards_are_send_and_sync_route_inputs() {
+            #[cfg(feature = "cloudflare-d1")]
+            assert_send_sync_type::<super::D1<TestBinding>>();
+            #[cfg(feature = "cloudflare-queue")]
+            assert_send_sync_type::<super::QueueBinding<TestBinding>>();
+            #[cfg(feature = "cloudflare-kv")]
+            assert_send_sync_type::<super::Kv<TestBinding>>();
+            #[cfg(feature = "cloudflare-r2")]
+            assert_send_sync_type::<super::R2Bucket<TestBinding>>();
+            #[cfg(feature = "cloudflare-service")]
+            assert_send_sync_type::<super::ServiceBinding<TestBinding>>();
+            #[cfg(feature = "cloudflare-hyperdrive")]
+            assert_send_sync_type::<super::Hyperdrive<TestBinding>>();
         }
     }
 }

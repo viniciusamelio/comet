@@ -9,7 +9,7 @@ It depends on `comet` with `default-features = false` and `features =
 Rocket's native local client. The Worker entrypoint calls:
 
 ```rust
-comet::cloudflare::serve_cached(req, || rocket(env)).await
+ROCKET.fetch(req, env, ctx).await
 ```
 
 ## What's here
@@ -19,9 +19,11 @@ comet::cloudflare::serve_cached(req, || rocket(env)).await
   round-trips through an internal `TaskRow` before becoming a JSON `bool`),
   and unit tests for all of it.
 - `src/routes.rs` — Rocket routes that read and write a `tasks` table in D1
-  and publish `TaskEvent`s to a queue. All D1/Queue calls are async.
+  and publish `TaskEvent`s to a queue. The routes use typed comet binding
+  guards (`D1<DB>` and `QueueBinding<TaskEvents>`) so handlers do not manually
+  pull bindings out of `Env`. All D1/Queue calls are async.
 - `src/entry.rs` — the wasm-only glue: the `#[event(fetch)]` handler that
-  hands requests to Rocket via `comet::cloudflare::serve_cached`, and the
+  hands requests to Rocket via `comet::cloudflare::FetchApp`, and the
   `#[event(queue)]` consumer that asynchronously records each `TaskEvent`
   into a `task_events` table.
 - `src/error.rs` — an `ApiError` type that turns D1/Queue failures and
@@ -45,6 +47,21 @@ comet::cloudflare::serve_cached(req, || rocket(env)).await
   event to the queue.
 
 ### Rocket + non-`Send` bindings
+
+Cloudflare binding guards use marker types to name bindings:
+
+```rust
+struct DB;
+
+impl comet::cloudflare::BindingName for DB {
+    const NAME: &'static str = "DB";
+}
+
+#[get("/tasks")]
+async fn list_tasks(db: comet::cloudflare::D1<DB>) {
+    // use db.prepare(...)
+}
+```
 
 Rocket boxes route handler futures — and streaming responder bodies — as
 `Future`/`Stream` + `Send`. D1/Queue calls and `worker::Delay` all resolve
