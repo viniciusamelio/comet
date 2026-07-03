@@ -94,6 +94,161 @@ pub trait Entity {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaManifest {
+    pub tables: Vec<TableDef>,
+}
+
+impl SchemaManifest {
+    pub fn new(tables: impl IntoIterator<Item = TableDef>) -> Self {
+        let mut tables = tables.into_iter().collect::<Vec<_>>();
+        tables.sort_by_key(|table| table.name);
+        Self { tables }
+    }
+
+    pub fn from_entities(tables: impl IntoIterator<Item = TableDef>) -> Self {
+        Self::new(tables)
+    }
+
+    pub fn to_manifest_string(&self) -> String {
+        self.tables
+            .iter()
+            .map(format_table_manifest)
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    pub fn initial_migration(&self) -> Vec<String> {
+        self.tables
+            .iter()
+            .flat_map(|table| initial_table_migration(*table))
+            .collect()
+    }
+
+    pub fn diff(&self, desired: &SchemaManifest) -> MigrationPlan {
+        let mut statements = Vec::new();
+        let mut blockers = Vec::new();
+
+        for current_table in &self.tables {
+            if desired.table(current_table.name).is_none() {
+                blockers.push(MigrationBlocker::DropTable {
+                    table: current_table.name.to_owned(),
+                });
+            }
+        }
+
+        for desired_table in &desired.tables {
+            let Some(current_table) = self.table(desired_table.name) else {
+                statements.extend(initial_table_migration(*desired_table));
+                continue;
+            };
+
+            diff_table(
+                current_table,
+                *desired_table,
+                &mut statements,
+                &mut blockers,
+            );
+        }
+
+        MigrationPlan {
+            statements,
+            blockers,
+        }
+    }
+
+    fn table(&self, name: &str) -> Option<TableDef> {
+        self.tables.iter().copied().find(|table| table.name == name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationPlan {
+    pub statements: Vec<String>,
+    pub blockers: Vec<MigrationBlocker>,
+}
+
+impl MigrationPlan {
+    pub fn is_safe(&self) -> bool {
+        self.blockers.is_empty()
+    }
+
+    pub fn to_sql_file_contents(&self) -> Result<String, MigrationWriteError> {
+        if !self.is_safe() {
+            return Err(MigrationWriteError::UnsafePlan {
+                blockers: self.blockers.clone(),
+            });
+        }
+
+        if self.statements.is_empty() {
+            return Err(MigrationWriteError::EmptyPlan);
+        }
+
+        Ok(format!("{};\n", self.statements.join(";\n")))
+    }
+
+    pub fn migration_file_name(
+        sequence: u32,
+        name: impl AsRef<str>,
+    ) -> Result<String, MigrationWriteError> {
+        let slug = migration_name_slug(name.as_ref())?;
+        Ok(format!("{sequence:04}_{slug}.sql"))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn write_sql_file(
+        &self,
+        directory: impl AsRef<std::path::Path>,
+        sequence: u32,
+        name: impl AsRef<str>,
+    ) -> Result<std::path::PathBuf, MigrationWriteError> {
+        let contents = self.to_sql_file_contents()?;
+        let file_name = Self::migration_file_name(sequence, name)?;
+        let directory = directory.as_ref();
+        std::fs::create_dir_all(directory).map_err(MigrationWriteError::Io)?;
+        let path = directory.join(file_name);
+        std::fs::write(&path, contents).map_err(MigrationWriteError::Io)?;
+        Ok(path)
+    }
+}
+
+#[derive(Debug)]
+pub enum MigrationWriteError {
+    UnsafePlan { blockers: Vec<MigrationBlocker> },
+    EmptyPlan,
+    InvalidName,
+    Io(std::io::Error),
+}
+
+impl PartialEq for MigrationWriteError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                MigrationWriteError::UnsafePlan { blockers: left },
+                MigrationWriteError::UnsafePlan { blockers: right },
+            ) => left == right,
+            (MigrationWriteError::EmptyPlan, MigrationWriteError::EmptyPlan)
+            | (MigrationWriteError::InvalidName, MigrationWriteError::InvalidName) => true,
+            (MigrationWriteError::Io(left), MigrationWriteError::Io(right)) => {
+                left.kind() == right.kind()
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for MigrationWriteError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MigrationBlocker {
+    DropTable { table: String },
+    DropColumn { table: String, column: String },
+    ChangeColumn { table: String, column: String },
+    UnsafeAddColumn { table: String, column: String },
+    DropIndex { table: String, index: String },
+    ChangeIndex { table: String, index: String },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Column<T> {
     table: &'static str,
@@ -761,6 +916,290 @@ fn is_indexed<E: Entity>(column: ColumnRef) -> bool {
         .any(|index| index.columns.first() == Some(&column.name))
 }
 
+fn initial_table_migration(table: TableDef) -> Vec<String> {
+    let mut statements = vec![create_table_statement(table)];
+    statements.extend(index_statements(table));
+    statements
+}
+
+fn create_table_statement(table: TableDef) -> String {
+    let columns = table
+        .columns
+        .iter()
+        .map(format_column_def)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!("CREATE TABLE {} ({columns})", quote_ident(table.name))
+}
+
+fn add_column_statement(table: TableDef, column: ColumnDef) -> String {
+    format!(
+        "ALTER TABLE {} ADD COLUMN {}",
+        quote_ident(table.name),
+        format_column_def(&column)
+    )
+}
+
+fn index_statements(table: TableDef) -> Vec<String> {
+    let mut statements = Vec::new();
+
+    for column in table.columns {
+        if column.indexed && !column.primary_key && !column.unique {
+            statements.push(create_index_statement(
+                table.name,
+                &generated_index_name(table.name, column.name),
+                &[column.name],
+                false,
+            ));
+        }
+    }
+
+    for index in table.indexes {
+        statements.push(create_index_statement(
+            table.name,
+            index.name,
+            index.columns,
+            index.unique,
+        ));
+    }
+
+    statements
+}
+
+fn create_index_statement(table: &str, name: &str, columns: &[&str], unique: bool) -> String {
+    let unique = if unique { "UNIQUE " } else { "" };
+    let columns = columns
+        .iter()
+        .map(|column| quote_ident(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "CREATE {unique}INDEX {} ON {} ({columns})",
+        quote_ident(name),
+        quote_ident(table)
+    )
+}
+
+fn generated_index_name(table: &str, column: &str) -> String {
+    format!("idx_{table}_{column}")
+}
+
+fn format_column_def(column: &ColumnDef) -> String {
+    let mut parts = vec![
+        quote_ident(column.name),
+        column.sql_type.as_sql().to_owned(),
+    ];
+
+    if column.primary_key {
+        parts.push("PRIMARY KEY".to_owned());
+    }
+
+    if column.auto_increment {
+        parts.push("AUTOINCREMENT".to_owned());
+    }
+
+    if column.unique && !column.primary_key {
+        parts.push("UNIQUE".to_owned());
+    }
+
+    if !column.nullable && !column.primary_key {
+        parts.push("NOT NULL".to_owned());
+    }
+
+    if let Some(default_sql) = column.default_sql {
+        parts.push(format!("DEFAULT {default_sql}"));
+    }
+
+    parts.join(" ")
+}
+
+fn diff_table(
+    current: TableDef,
+    desired: TableDef,
+    statements: &mut Vec<String>,
+    blockers: &mut Vec<MigrationBlocker>,
+) {
+    for current_column in current.columns {
+        if find_column(desired, current_column.name).is_none() {
+            blockers.push(MigrationBlocker::DropColumn {
+                table: current.name.to_owned(),
+                column: current_column.name.to_owned(),
+            });
+        }
+    }
+
+    for desired_column in desired.columns {
+        match find_column(current, desired_column.name) {
+            Some(current_column) if current_column != *desired_column => {
+                blockers.push(MigrationBlocker::ChangeColumn {
+                    table: current.name.to_owned(),
+                    column: desired_column.name.to_owned(),
+                });
+            }
+            Some(_) => {}
+            None if can_add_column(*desired_column) => {
+                statements.push(add_column_statement(desired, *desired_column));
+            }
+            None => blockers.push(MigrationBlocker::UnsafeAddColumn {
+                table: current.name.to_owned(),
+                column: desired_column.name.to_owned(),
+            }),
+        }
+    }
+
+    diff_indexes(current, desired, statements, blockers);
+}
+
+fn diff_indexes(
+    current: TableDef,
+    desired: TableDef,
+    statements: &mut Vec<String>,
+    blockers: &mut Vec<MigrationBlocker>,
+) {
+    let current_indexes = index_manifest(current);
+    let desired_indexes = index_manifest(desired);
+
+    for current_index in &current_indexes {
+        match desired_indexes
+            .iter()
+            .find(|index| index.name == current_index.name)
+        {
+            Some(desired_index) if desired_index != current_index => {
+                blockers.push(MigrationBlocker::ChangeIndex {
+                    table: current.name.to_owned(),
+                    index: current_index.name.clone(),
+                });
+            }
+            Some(_) => {}
+            None => blockers.push(MigrationBlocker::DropIndex {
+                table: current.name.to_owned(),
+                index: current_index.name.clone(),
+            }),
+        }
+    }
+
+    for desired_index in &desired_indexes {
+        if current_indexes
+            .iter()
+            .all(|index| index.name != desired_index.name)
+        {
+            statements.push(create_index_statement(
+                desired.name,
+                &desired_index.name,
+                &desired_index.columns,
+                desired_index.unique,
+            ));
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IndexManifest {
+    name: String,
+    columns: Vec<&'static str>,
+    unique: bool,
+}
+
+fn index_manifest(table: TableDef) -> Vec<IndexManifest> {
+    let mut indexes = Vec::new();
+
+    for column in table.columns {
+        if column.indexed && !column.primary_key && !column.unique {
+            indexes.push(IndexManifest {
+                name: generated_index_name(table.name, column.name),
+                columns: vec![column.name],
+                unique: false,
+            });
+        }
+    }
+
+    indexes.extend(table.indexes.iter().map(|index| IndexManifest {
+        name: index.name.to_owned(),
+        columns: index.columns.to_vec(),
+        unique: index.unique,
+    }));
+    indexes.sort_by(|left, right| left.name.cmp(&right.name));
+    indexes
+}
+
+fn find_column(table: TableDef, name: &str) -> Option<ColumnDef> {
+    table
+        .columns
+        .iter()
+        .copied()
+        .find(|column| column.name == name)
+}
+
+fn can_add_column(column: ColumnDef) -> bool {
+    !column.primary_key
+        && !column.auto_increment
+        && !column.unique
+        && (column.nullable || column.default_sql.is_some())
+}
+
+fn format_table_manifest(table: &TableDef) -> String {
+    let mut lines = vec![format!("table {}", table.name)];
+
+    for column in table.columns {
+        lines.push(format!(
+            "column {} {} nullable={} primary_key={} auto_increment={} unique={} indexed={} default={}",
+            column.name,
+            column.sql_type.as_sql(),
+            column.nullable,
+            column.primary_key,
+            column.auto_increment,
+            column.unique,
+            column.indexed,
+            column.default_sql.unwrap_or("")
+        ));
+    }
+
+    let mut indexes = table.indexes.to_vec();
+    indexes.sort_by_key(|index| index.name);
+    for index in indexes {
+        lines.push(format!(
+            "index {} columns={} unique={}",
+            index.name,
+            index.columns.join(","),
+            index.unique
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn migration_name_slug(name: &str) -> Result<String, MigrationWriteError> {
+    let mut slug = String::new();
+    let mut last_was_separator = false;
+
+    for character in name.trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            last_was_separator = false;
+        } else if (character == '_' || character == '-' || character.is_ascii_whitespace())
+            && !slug.is_empty()
+            && !last_was_separator
+        {
+            slug.push('_');
+            last_was_separator = true;
+        } else if character == '.' || character == '/' || character == '\\' {
+            return Err(MigrationWriteError::InvalidName);
+        }
+    }
+
+    while slug.ends_with('_') {
+        slug.pop();
+    }
+
+    if slug.is_empty() {
+        return Err(MigrationWriteError::InvalidName);
+    }
+
+    Ok(slug)
+}
+
 #[cfg(feature = "nebula-d1")]
 pub mod d1 {
     use worker::wasm_bindgen::JsValue;
@@ -861,7 +1300,8 @@ pub mod d1 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Column, ColumnDef, ColumnRef, Entity, IndexDef, QueryLint, SqlType, TableDef, Value,
+        Column, ColumnDef, ColumnRef, Entity, IndexDef, MigrationBlocker, MigrationPlan,
+        MigrationWriteError, QueryLint, SchemaManifest, SqlType, TableDef, Value,
     };
 
     struct Task;
@@ -1081,5 +1521,272 @@ mod tests {
                 },
             }]
         );
+    }
+
+    #[test]
+    fn schema_manifest_string_is_deterministic() {
+        const OTHER_COLUMNS: &[ColumnDef] = &[ColumnDef::new("id", SqlType::Integer)];
+        let other = TableDef {
+            name: "audit",
+            columns: OTHER_COLUMNS,
+            indexes: &[],
+        };
+
+        let manifest = SchemaManifest::new([Task::TABLE, other]);
+
+        assert_eq!(
+            manifest.to_manifest_string(),
+            "table audit\n\
+             column id INTEGER nullable=false primary_key=false auto_increment=false unique=false indexed=false default=\n\n\
+             table tasks\n\
+             column id INTEGER nullable=false primary_key=true auto_increment=true unique=true indexed=true default=\n\
+             column title TEXT nullable=false primary_key=false auto_increment=false unique=false indexed=false default=\n\
+             column done INTEGER nullable=false primary_key=false auto_increment=false unique=false indexed=false default=\n\
+             column created_at TEXT nullable=false primary_key=false auto_increment=false unique=false indexed=false default=\n\
+             index idx_tasks_done_created_at columns=done,created_at unique=false"
+        );
+    }
+
+    #[test]
+    fn initial_migration_generates_create_table_and_indexes() {
+        let manifest = SchemaManifest::new([Task::TABLE]);
+
+        assert_eq!(
+            manifest.initial_migration(),
+            vec![
+                "CREATE TABLE \"tasks\" (\"id\" INTEGER PRIMARY KEY AUTOINCREMENT, \"title\" TEXT NOT NULL, \"done\" INTEGER NOT NULL, \"created_at\" TEXT NOT NULL)",
+                "CREATE INDEX \"idx_tasks_done_created_at\" ON \"tasks\" (\"done\", \"created_at\")",
+            ]
+        );
+    }
+
+    #[test]
+    fn migration_diff_generates_safe_additive_changes() {
+        const CURRENT_COLUMNS: &[ColumnDef] = &[
+            ColumnDef {
+                name: "id",
+                sql_type: SqlType::Integer,
+                nullable: false,
+                primary_key: true,
+                auto_increment: true,
+                unique: true,
+                indexed: true,
+                default_sql: None,
+            },
+            ColumnDef::new("title", SqlType::Text),
+        ];
+        const DESIRED_COLUMNS: &[ColumnDef] = &[
+            ColumnDef {
+                name: "id",
+                sql_type: SqlType::Integer,
+                nullable: false,
+                primary_key: true,
+                auto_increment: true,
+                unique: true,
+                indexed: true,
+                default_sql: None,
+            },
+            ColumnDef::new("title", SqlType::Text),
+            ColumnDef {
+                name: "done",
+                sql_type: SqlType::Boolean,
+                nullable: false,
+                primary_key: false,
+                auto_increment: false,
+                unique: false,
+                indexed: true,
+                default_sql: Some("0"),
+            },
+            ColumnDef {
+                name: "notes",
+                sql_type: SqlType::Text,
+                nullable: true,
+                primary_key: false,
+                auto_increment: false,
+                unique: false,
+                indexed: false,
+                default_sql: None,
+            },
+        ];
+        let current = SchemaManifest::new([TableDef {
+            name: "tasks",
+            columns: CURRENT_COLUMNS,
+            indexes: &[],
+        }]);
+        let desired = SchemaManifest::new([TableDef {
+            name: "tasks",
+            columns: DESIRED_COLUMNS,
+            indexes: &[],
+        }]);
+
+        let plan = current.diff(&desired);
+
+        assert!(plan.is_safe());
+        assert_eq!(plan.blockers, Vec::new());
+        assert_eq!(
+            plan.statements,
+            vec![
+                "ALTER TABLE \"tasks\" ADD COLUMN \"done\" INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE \"tasks\" ADD COLUMN \"notes\" TEXT",
+                "CREATE INDEX \"idx_tasks_done\" ON \"tasks\" (\"done\")",
+            ]
+        );
+    }
+
+    #[test]
+    fn migration_diff_blocks_destructive_or_ambiguous_changes() {
+        const CURRENT_COLUMNS: &[ColumnDef] = &[
+            ColumnDef::new("id", SqlType::Integer),
+            ColumnDef::new("title", SqlType::Text),
+            ColumnDef {
+                name: "legacy",
+                sql_type: SqlType::Text,
+                nullable: true,
+                primary_key: false,
+                auto_increment: false,
+                unique: false,
+                indexed: false,
+                default_sql: None,
+            },
+        ];
+        const DESIRED_COLUMNS: &[ColumnDef] = &[
+            ColumnDef::new("id", SqlType::Integer),
+            ColumnDef {
+                name: "title",
+                sql_type: SqlType::Text,
+                nullable: true,
+                primary_key: false,
+                auto_increment: false,
+                unique: false,
+                indexed: false,
+                default_sql: None,
+            },
+            ColumnDef::new("required", SqlType::Text),
+        ];
+        let current = SchemaManifest::new([TableDef {
+            name: "tasks",
+            columns: CURRENT_COLUMNS,
+            indexes: &[],
+        }]);
+        let desired = SchemaManifest::new([TableDef {
+            name: "tasks",
+            columns: DESIRED_COLUMNS,
+            indexes: &[],
+        }]);
+
+        let plan = current.diff(&desired);
+
+        assert!(!plan.is_safe());
+        assert_eq!(
+            plan.blockers,
+            vec![
+                MigrationBlocker::DropColumn {
+                    table: "tasks".into(),
+                    column: "legacy".into(),
+                },
+                MigrationBlocker::ChangeColumn {
+                    table: "tasks".into(),
+                    column: "title".into(),
+                },
+                MigrationBlocker::UnsafeAddColumn {
+                    table: "tasks".into(),
+                    column: "required".into(),
+                },
+            ]
+        );
+        assert_eq!(plan.statements, Vec::<String>::new());
+    }
+
+    #[test]
+    fn migration_plan_formats_sql_file_contents() {
+        let plan = MigrationPlan {
+            statements: vec![
+                "CREATE TABLE \"tasks\" (\"id\" INTEGER NOT NULL)".into(),
+                "CREATE INDEX \"idx_tasks_id\" ON \"tasks\" (\"id\")".into(),
+            ],
+            blockers: Vec::new(),
+        };
+
+        assert_eq!(
+            plan.to_sql_file_contents().unwrap(),
+            "CREATE TABLE \"tasks\" (\"id\" INTEGER NOT NULL);\n\
+             CREATE INDEX \"idx_tasks_id\" ON \"tasks\" (\"id\");\n"
+        );
+    }
+
+    #[test]
+    fn migration_file_name_is_deterministic_and_rejects_paths() {
+        assert_eq!(
+            MigrationPlan::migration_file_name(7, "Add Task Done").unwrap(),
+            "0007_add_task_done.sql"
+        );
+        assert_eq!(
+            MigrationPlan::migration_file_name(12, "  add---task___done  ").unwrap(),
+            "0012_add_task_done.sql"
+        );
+        assert_eq!(
+            MigrationPlan::migration_file_name(1, "../escape").unwrap_err(),
+            MigrationWriteError::InvalidName
+        );
+        assert_eq!(
+            MigrationPlan::migration_file_name(1, "   ").unwrap_err(),
+            MigrationWriteError::InvalidName
+        );
+    }
+
+    #[test]
+    fn migration_plan_refuses_to_write_empty_or_unsafe_plans() {
+        let empty = MigrationPlan {
+            statements: Vec::new(),
+            blockers: Vec::new(),
+        };
+        assert_eq!(
+            empty.to_sql_file_contents().unwrap_err(),
+            MigrationWriteError::EmptyPlan
+        );
+
+        let unsafe_plan = MigrationPlan {
+            statements: vec!["ALTER TABLE \"tasks\" ADD COLUMN \"done\" INTEGER".into()],
+            blockers: vec![MigrationBlocker::DropColumn {
+                table: "tasks".into(),
+                column: "legacy".into(),
+            }],
+        };
+        assert_eq!(
+            unsafe_plan.to_sql_file_contents().unwrap_err(),
+            MigrationWriteError::UnsafePlan {
+                blockers: vec![MigrationBlocker::DropColumn {
+                    table: "tasks".into(),
+                    column: "legacy".into(),
+                }],
+            }
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn migration_plan_writes_sql_file() {
+        let plan = MigrationPlan {
+            statements: vec!["CREATE TABLE \"tasks\" (\"id\" INTEGER NOT NULL)".into()],
+            blockers: Vec::new(),
+        };
+        let directory = std::env::temp_dir().join(format!(
+            "comet-nebula-test-{}-{}",
+            std::process::id(),
+            "migration_plan_writes_sql_file"
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+
+        let path = plan
+            .write_sql_file(&directory, 3, "Initial Tasks")
+            .expect("write migration file");
+
+        assert_eq!(path.file_name().unwrap(), "0003_initial_tasks.sql");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "CREATE TABLE \"tasks\" (\"id\" INTEGER NOT NULL);\n"
+        );
+
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

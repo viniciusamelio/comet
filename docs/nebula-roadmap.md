@@ -101,6 +101,53 @@ Destructive changes should be blocked by default. The first safe diff set is:
 - create index
 - create unique index
 
+## Migration Core
+
+The MVP migration core lives in `comet::nebula` and is intentionally independent
+from Wrangler, D1 bindings, and Worker request runtime.
+
+It exposes:
+
+- `SchemaManifest::new(...)` for deterministic table manifests.
+- `SchemaManifest::to_manifest_string()` for snapshotting schema state.
+- `SchemaManifest::initial_migration()` for `CREATE TABLE` and index SQL.
+- `SchemaManifest::diff(...)` for safe additive migration plans.
+- `MigrationPlan::is_safe()` plus `MigrationBlocker` values for changes that
+  require human review.
+- `MigrationPlan::to_sql_file_contents()` for semicolon-terminated SQL files.
+- `MigrationPlan::migration_file_name(...)` for deterministic
+  `0001_slug.sql` names.
+- `MigrationPlan::write_sql_file(...)` for native tooling that writes files
+  under a Wrangler-compatible migrations directory.
+
+The safe diff MVP generates:
+
+- missing tables
+- nullable columns
+- columns with defaults
+- missing indexes
+- missing unique indexes
+
+The diff blocks:
+
+- dropped tables
+- dropped columns
+- changed columns
+- non-null columns without defaults
+- changed or dropped indexes
+
+The core writer produces Wrangler-compatible numbered migration files, for
+example:
+
+```text
+migrations/0001_initial.sql
+migrations/0002_add_task_done.sql
+```
+
+Those files are then applied with Wrangler's normal D1 migration flow, not from
+inside a Worker request. A future CLI/build wrapper should call the core writer
+after collecting entity metadata from application code.
+
 ## D1 Performance Constraints
 
 D1 pricing and performance are shaped by rows read, rows written, statement
@@ -168,6 +215,9 @@ Implemented:
 - `Select`, `Insert`, `Update`, and `Delete` builders.
 - `nebula-d1` execution helpers for D1 prepared statements, batch execution,
   and typed result fetching.
+- Migration manifests, initial migration SQL, and safe additive schema diffs.
+- Native migration SQL file writer for Wrangler-compatible `migrations/`
+  directories.
 - Example task routes backed by Nebula against local D1.
 - SQL-generation benchmarks and `wrangler dev` performance smoke coverage for
   the D1-backed example route.
@@ -177,4 +227,4 @@ Implemented:
 Next:
 
 - Derive macro package plan.
-- Migration manifest format.
+- CLI/build wrapper that discovers entities and calls the migration writer.
