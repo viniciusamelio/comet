@@ -23,7 +23,7 @@ Last updated: 2026-07-03
 | D1 execution adapter | done | Statement and explicit batch execution helpers compile behind `nebula-d1`; Worker integration executes Nebula queries against local D1. |
 | Entity derive macros | pending | Requires a proc-macro crate or workspace split. |
 | Migration generation | pending | Should run from CLI/build tooling, not Worker request runtime. |
-| Query optimization hints | pending | Should flag missing indexes and dangerous scans before production. |
+| Query optimization hints | done | Builder-level `lint()` flags missing limits, unindexed filters/orderings, and broad writes with explicit escape hatches. |
 | Comet example integration | done | Task routes use Nebula for D1 reads/writes while preserving queue behavior and integration coverage. |
 | Performance validation | done | SQL-generation bench exists; `wrangler dev` perf smoke covers `/tasks` through Nebula+D1; feature-gated build was audited. |
 
@@ -97,10 +97,10 @@ Goal: help users avoid expensive D1 scans while keeping runtime fast.
 
 | ID | Task | Status | Owner | Target files | Done when |
 | --- | --- | --- | --- | --- | --- |
-| F1 | Track indexed columns in metadata | pending | unassigned | core/macro | Query validation can tell whether filters/orderings use indexed columns. |
-| F2 | Add query lint API | pending | unassigned | core/CLI | Lints flag missing limits, unindexed filters, unindexed orderings, and broad deletes/updates. |
-| F3 | Add explicit escape hatches | pending | unassigned | core docs | Users can acknowledge intentional scans/destructive statements in code. |
-| F4 | Document D1 cost model implications | pending | unassigned | docs | Docs connect lints to D1 rows read/written and index usage. |
+| F1 | Track indexed columns in metadata | done | Codex 2026-07-03 | core/macro | Query validation can tell whether filters/orderings use indexed columns. |
+| F2 | Add query lint API | done | Codex 2026-07-03 | core/CLI | Lints flag missing limits, unindexed filters, unindexed orderings, and broad deletes/updates. |
+| F3 | Add explicit escape hatches | done | Codex 2026-07-03 | core docs | Users can acknowledge intentional scans/destructive statements in code. |
+| F4 | Document D1 cost model implications | done | Codex 2026-07-03 | docs | Docs connect lints to D1 rows read/written and index usage. |
 
 ### G. Example App Integration
 
