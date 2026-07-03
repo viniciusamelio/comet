@@ -1,0 +1,5 @@
+error: unsupported Nebula field type `SystemTime`
+ --> tests/ui/nebula_derive_unsupported_type.rs:7:17
+  |
+7 |     created_at: SystemTime,
+  |                 ^^^^^^^^^^

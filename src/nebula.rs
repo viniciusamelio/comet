@@ -1,5 +1,7 @@
 use std::marker::PhantomData;
 
+pub use comet_macros::Entity;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SqlType {
     Integer,
@@ -56,10 +58,18 @@ pub struct IndexDef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForeignKeyDef {
+    pub columns: &'static [&'static str],
+    pub references_table: &'static str,
+    pub references_columns: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableDef {
     pub name: &'static str,
     pub columns: &'static [ColumnDef],
     pub indexes: &'static [IndexDef],
+    pub foreign_keys: &'static [ForeignKeyDef],
 }
 
 pub trait Entity {
@@ -94,6 +104,100 @@ pub trait Entity {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BelongsTo<Child, Parent, T> {
+    local_column: Column<T>,
+    foreign_column: Column<T>,
+    _child: PhantomData<Child>,
+    _parent: PhantomData<Parent>,
+}
+
+impl<Child, Parent, T> BelongsTo<Child, Parent, T> {
+    pub const fn new(local_column: Column<T>, foreign_column: Column<T>) -> Self {
+        Self {
+            local_column,
+            foreign_column,
+            _child: PhantomData,
+            _parent: PhantomData,
+        }
+    }
+
+    pub fn local_column(&self) -> Column<T> {
+        Column::new(self.local_column.table, self.local_column.name)
+    }
+
+    pub fn foreign_column(&self) -> Column<T> {
+        Column::new(self.foreign_column.table, self.foreign_column.name)
+    }
+}
+
+impl<Child, Parent, T> BelongsTo<Child, Parent, T>
+where
+    Parent: Entity,
+{
+    pub fn select_parent<V>(&self, local_value: V) -> Select<Parent>
+    where
+        V: Into<Value>,
+    {
+        Parent::select()
+            .where_(self.foreign_column().eq(local_value))
+            .limit(1)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HasMany<Parent, Child, T> {
+    parent_column: Column<T>,
+    child_column: Column<T>,
+    _parent: PhantomData<Parent>,
+    _child: PhantomData<Child>,
+}
+
+impl<Parent, Child, T> HasMany<Parent, Child, T> {
+    pub const fn new(parent_column: Column<T>, child_column: Column<T>) -> Self {
+        Self {
+            parent_column,
+            child_column,
+            _parent: PhantomData,
+            _child: PhantomData,
+        }
+    }
+
+    pub fn parent_column(&self) -> Column<T> {
+        Column::new(self.parent_column.table, self.parent_column.name)
+    }
+
+    pub fn child_column(&self) -> Column<T> {
+        Column::new(self.child_column.table, self.child_column.name)
+    }
+}
+
+impl<Parent, Child, T> HasMany<Parent, Child, T>
+where
+    Child: Entity,
+{
+    pub fn select_children<V>(&self, parent_value: V) -> Select<Child>
+    where
+        V: Into<Value>,
+    {
+        Child::select().where_(self.child_column().eq(parent_value))
+    }
+}
+
+pub const fn belongs_to<Child, Parent, T>(
+    local_column: Column<T>,
+    foreign_column: Column<T>,
+) -> BelongsTo<Child, Parent, T> {
+    BelongsTo::new(local_column, foreign_column)
+}
+
+pub const fn has_many<Parent, Child, T>(
+    parent_column: Column<T>,
+    child_column: Column<T>,
+) -> HasMany<Parent, Child, T> {
+    HasMany::new(parent_column, child_column)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaManifest {
     pub tables: Vec<TableDef>,
@@ -116,6 +220,10 @@ impl SchemaManifest {
             .map(format_table_manifest)
             .collect::<Vec<_>>()
             .join("\n\n")
+    }
+
+    pub fn lint(&self) -> Vec<SchemaLint> {
+        self.tables.iter().flat_map(|table| table.lint()).collect()
     }
 
     pub fn initial_migration(&self) -> Vec<String> {
@@ -159,6 +267,20 @@ impl SchemaManifest {
 
     fn table(&self, name: &str) -> Option<TableDef> {
         self.tables.iter().copied().find(|table| table.name == name)
+    }
+}
+
+impl TableDef {
+    pub fn lint(&self) -> Vec<SchemaLint> {
+        self.foreign_keys
+            .iter()
+            .flat_map(|foreign_key| foreign_key.columns.iter())
+            .filter(|column| !is_indexed_in_table(*self, column))
+            .map(|column| SchemaLint::UnindexedForeignKey {
+                table: self.name,
+                column: *column,
+            })
+            .collect()
     }
 }
 
@@ -247,6 +369,17 @@ pub enum MigrationBlocker {
     UnsafeAddColumn { table: String, column: String },
     DropIndex { table: String, index: String },
     ChangeIndex { table: String, index: String },
+    AddForeignKey { table: String, columns: Vec<String> },
+    DropForeignKey { table: String, columns: Vec<String> },
+    ChangeForeignKey { table: String, columns: Vec<String> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaLint {
+    UnindexedForeignKey {
+        table: &'static str,
+        column: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -907,13 +1040,17 @@ fn is_indexed<E: Entity>(column: ColumnRef) -> bool {
         return false;
     }
 
-    E::TABLE.columns.iter().any(|definition| {
-        definition.name == column.name
+    is_indexed_in_table(E::TABLE, column.name)
+}
+
+fn is_indexed_in_table(table: TableDef, column: &str) -> bool {
+    table.columns.iter().any(|definition| {
+        definition.name == column
             && (definition.primary_key || definition.unique || definition.indexed)
-    }) || E::TABLE
+    }) || table
         .indexes
         .iter()
-        .any(|index| index.columns.first() == Some(&column.name))
+        .any(|index| index.columns.first() == Some(&column))
 }
 
 fn initial_table_migration(table: TableDef) -> Vec<String> {
@@ -923,14 +1060,15 @@ fn initial_table_migration(table: TableDef) -> Vec<String> {
 }
 
 fn create_table_statement(table: TableDef) -> String {
-    let columns = table
+    let mut definitions = table
         .columns
         .iter()
         .map(format_column_def)
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect::<Vec<_>>();
+    definitions.extend(table.foreign_keys.iter().map(format_foreign_key_def));
+    let definitions = definitions.join(", ");
 
-    format!("CREATE TABLE {} ({columns})", quote_ident(table.name))
+    format!("CREATE TABLE {} ({definitions})", quote_ident(table.name))
 }
 
 fn add_column_statement(table: TableDef, column: ColumnDef) -> String {
@@ -1015,6 +1153,26 @@ fn format_column_def(column: &ColumnDef) -> String {
     parts.join(" ")
 }
 
+fn format_foreign_key_def(foreign_key: &ForeignKeyDef) -> String {
+    let columns = foreign_key
+        .columns
+        .iter()
+        .map(|column| quote_ident(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let references_columns = foreign_key
+        .references_columns
+        .iter()
+        .map(|column| quote_ident(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "FOREIGN KEY ({columns}) REFERENCES {} ({references_columns})",
+        quote_ident(foreign_key.references_table)
+    )
+}
+
 fn diff_table(
     current: TableDef,
     desired: TableDef,
@@ -1050,6 +1208,7 @@ fn diff_table(
     }
 
     diff_indexes(current, desired, statements, blockers);
+    diff_foreign_keys(current, desired, blockers);
 }
 
 fn diff_indexes(
@@ -1095,6 +1254,42 @@ fn diff_indexes(
     }
 }
 
+fn diff_foreign_keys(current: TableDef, desired: TableDef, blockers: &mut Vec<MigrationBlocker>) {
+    let current_foreign_keys = foreign_key_manifest(current);
+    let desired_foreign_keys = foreign_key_manifest(desired);
+
+    for current_foreign_key in &current_foreign_keys {
+        match desired_foreign_keys
+            .iter()
+            .find(|foreign_key| foreign_key.columns == current_foreign_key.columns)
+        {
+            Some(desired_foreign_key) if desired_foreign_key != current_foreign_key => {
+                blockers.push(MigrationBlocker::ChangeForeignKey {
+                    table: current.name.to_owned(),
+                    columns: current_foreign_key.columns.clone(),
+                });
+            }
+            Some(_) => {}
+            None => blockers.push(MigrationBlocker::DropForeignKey {
+                table: current.name.to_owned(),
+                columns: current_foreign_key.columns.clone(),
+            }),
+        }
+    }
+
+    for desired_foreign_key in &desired_foreign_keys {
+        if current_foreign_keys
+            .iter()
+            .all(|foreign_key| foreign_key.columns != desired_foreign_key.columns)
+        {
+            blockers.push(MigrationBlocker::AddForeignKey {
+                table: desired.name.to_owned(),
+                columns: desired_foreign_key.columns.clone(),
+            });
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IndexManifest {
     name: String,
@@ -1122,6 +1317,35 @@ fn index_manifest(table: TableDef) -> Vec<IndexManifest> {
     }));
     indexes.sort_by(|left, right| left.name.cmp(&right.name));
     indexes
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ForeignKeyManifest {
+    columns: Vec<String>,
+    references_table: String,
+    references_columns: Vec<String>,
+}
+
+fn foreign_key_manifest(table: TableDef) -> Vec<ForeignKeyManifest> {
+    let mut foreign_keys = table
+        .foreign_keys
+        .iter()
+        .map(|foreign_key| ForeignKeyManifest {
+            columns: foreign_key
+                .columns
+                .iter()
+                .map(|column| (*column).to_owned())
+                .collect(),
+            references_table: foreign_key.references_table.to_owned(),
+            references_columns: foreign_key
+                .references_columns
+                .iter()
+                .map(|column| (*column).to_owned())
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    foreign_keys.sort_by(|left, right| left.columns.cmp(&right.columns));
+    foreign_keys
 }
 
 fn find_column(table: TableDef, name: &str) -> Option<ColumnDef> {
@@ -1164,6 +1388,17 @@ fn format_table_manifest(table: &TableDef) -> String {
             index.name,
             index.columns.join(","),
             index.unique
+        ));
+    }
+
+    let mut foreign_keys = table.foreign_keys.to_vec();
+    foreign_keys.sort_by_key(|foreign_key| foreign_key.columns.join(","));
+    for foreign_key in foreign_keys {
+        lines.push(format!(
+            "foreign_key columns={} references={}.{}",
+            foreign_key.columns.join(","),
+            foreign_key.references_table,
+            foreign_key.references_columns.join(",")
         ));
     }
 
@@ -1300,8 +1535,9 @@ pub mod d1 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Column, ColumnDef, ColumnRef, Entity, IndexDef, MigrationBlocker, MigrationPlan,
-        MigrationWriteError, QueryLint, SchemaManifest, SqlType, TableDef, Value,
+        BelongsTo, Column, ColumnDef, ColumnRef, Entity, ForeignKeyDef, HasMany, IndexDef,
+        MigrationBlocker, MigrationPlan, MigrationWriteError, QueryLint, SchemaLint,
+        SchemaManifest, SqlType, TableDef, Value, belongs_to, has_many,
     };
 
     struct Task;
@@ -1340,7 +1576,33 @@ mod tests {
             name: "tasks",
             columns: TASK_COLUMNS,
             indexes: TASK_INDEXES,
+            foreign_keys: &[],
         };
+    }
+
+    struct Board;
+
+    impl Board {
+        const ID: Column<i64> = Column::new("boards", "id");
+        const TASKS: HasMany<Board, Task, i64> = has_many(Self::ID, Task::ID);
+    }
+
+    const BOARD_COLUMNS: &[ColumnDef] = &[
+        ColumnDef::new("id", SqlType::Integer),
+        ColumnDef::new("name", SqlType::Text),
+    ];
+
+    impl Entity for Board {
+        const TABLE: TableDef = TableDef {
+            name: "boards",
+            columns: BOARD_COLUMNS,
+            indexes: &[],
+            foreign_keys: &[],
+        };
+    }
+
+    impl Task {
+        const BOARD: BelongsTo<Task, Board, i64> = belongs_to(Self::ID, Board::ID);
     }
 
     #[test]
@@ -1485,6 +1747,33 @@ mod tests {
     }
 
     #[test]
+    fn belongs_to_relation_builds_parent_lookup() {
+        let statement = Task::BOARD.select_parent(42).to_statement();
+
+        assert_eq!(
+            statement.sql,
+            "SELECT \"id\", \"name\" FROM \"boards\" WHERE \"boards\".\"id\" = ? LIMIT ?"
+        );
+        assert_eq!(statement.binds, vec![Value::Integer(42), Value::Integer(1)]);
+    }
+
+    #[test]
+    fn has_many_relation_builds_child_lookup() {
+        let statement = Board::TASKS
+            .select_children(7)
+            .order_by(Task::ID.asc())
+            .limit(50)
+            .to_statement();
+
+        assert_eq!(
+            statement.sql,
+            "SELECT \"id\", \"title\", \"done\", \"created_at\" FROM \"tasks\" \
+             WHERE \"tasks\".\"id\" = ? ORDER BY \"tasks\".\"id\" ASC LIMIT ?"
+        );
+        assert_eq!(statement.binds, vec![Value::Integer(7), Value::Integer(50)]);
+    }
+
+    #[test]
     fn write_lints_flag_broad_writes() {
         assert_eq!(
             Task::update().set(Task::DONE, true).lint(),
@@ -1530,6 +1819,7 @@ mod tests {
             name: "audit",
             columns: OTHER_COLUMNS,
             indexes: &[],
+            foreign_keys: &[],
         };
 
         let manifest = SchemaManifest::new([Task::TABLE, other]);
@@ -1558,6 +1848,108 @@ mod tests {
                 "CREATE INDEX \"idx_tasks_done_created_at\" ON \"tasks\" (\"done\", \"created_at\")",
             ]
         );
+    }
+
+    #[test]
+    fn initial_migration_generates_foreign_key_constraints() {
+        const BOARD_COLUMNS: &[ColumnDef] = &[
+            ColumnDef {
+                name: "id",
+                sql_type: SqlType::Integer,
+                nullable: false,
+                primary_key: true,
+                auto_increment: false,
+                unique: true,
+                indexed: true,
+                default_sql: None,
+            },
+            ColumnDef {
+                name: "owner_id",
+                sql_type: SqlType::Integer,
+                nullable: false,
+                primary_key: false,
+                auto_increment: false,
+                unique: false,
+                indexed: true,
+                default_sql: None,
+            },
+        ];
+        const BOARD_FOREIGN_KEYS: &[ForeignKeyDef] = &[ForeignKeyDef {
+            columns: &["owner_id"],
+            references_table: "users",
+            references_columns: &["id"],
+        }];
+        let manifest = SchemaManifest::new([TableDef {
+            name: "boards",
+            columns: BOARD_COLUMNS,
+            indexes: &[],
+            foreign_keys: BOARD_FOREIGN_KEYS,
+        }]);
+
+        assert_eq!(
+            manifest.initial_migration(),
+            vec![
+                "CREATE TABLE \"boards\" (\"id\" INTEGER PRIMARY KEY, \"owner_id\" INTEGER NOT NULL, FOREIGN KEY (\"owner_id\") REFERENCES \"users\" (\"id\"))",
+                "CREATE INDEX \"idx_boards_owner_id\" ON \"boards\" (\"owner_id\")",
+            ]
+        );
+    }
+
+    #[test]
+    fn schema_lints_flag_unindexed_foreign_keys() {
+        const COMMENT_COLUMNS: &[ColumnDef] = &[
+            ColumnDef::new("id", SqlType::Integer),
+            ColumnDef::new("task_id", SqlType::Integer),
+        ];
+        const COMMENT_FOREIGN_KEYS: &[ForeignKeyDef] = &[ForeignKeyDef {
+            columns: &["task_id"],
+            references_table: "tasks",
+            references_columns: &["id"],
+        }];
+        let manifest = SchemaManifest::new([TableDef {
+            name: "comments",
+            columns: COMMENT_COLUMNS,
+            indexes: &[],
+            foreign_keys: COMMENT_FOREIGN_KEYS,
+        }]);
+
+        assert_eq!(
+            manifest.lint(),
+            vec![SchemaLint::UnindexedForeignKey {
+                table: "comments",
+                column: "task_id",
+            }]
+        );
+    }
+
+    #[test]
+    fn schema_lints_accept_indexed_foreign_keys() {
+        const COMMENT_COLUMNS: &[ColumnDef] = &[
+            ColumnDef::new("id", SqlType::Integer),
+            ColumnDef {
+                name: "task_id",
+                sql_type: SqlType::Integer,
+                nullable: false,
+                primary_key: false,
+                auto_increment: false,
+                unique: false,
+                indexed: true,
+                default_sql: None,
+            },
+        ];
+        const COMMENT_FOREIGN_KEYS: &[ForeignKeyDef] = &[ForeignKeyDef {
+            columns: &["task_id"],
+            references_table: "tasks",
+            references_columns: &["id"],
+        }];
+        let manifest = SchemaManifest::new([TableDef {
+            name: "comments",
+            columns: COMMENT_COLUMNS,
+            indexes: &[],
+            foreign_keys: COMMENT_FOREIGN_KEYS,
+        }]);
+
+        assert_eq!(manifest.lint(), Vec::new());
     }
 
     #[test]
@@ -1612,11 +2004,13 @@ mod tests {
             name: "tasks",
             columns: CURRENT_COLUMNS,
             indexes: &[],
+            foreign_keys: &[],
         }]);
         let desired = SchemaManifest::new([TableDef {
             name: "tasks",
             columns: DESIRED_COLUMNS,
             indexes: &[],
+            foreign_keys: &[],
         }]);
 
         let plan = current.diff(&desired);
@@ -1667,11 +2061,13 @@ mod tests {
             name: "tasks",
             columns: CURRENT_COLUMNS,
             indexes: &[],
+            foreign_keys: &[],
         }]);
         let desired = SchemaManifest::new([TableDef {
             name: "tasks",
             columns: DESIRED_COLUMNS,
             indexes: &[],
+            foreign_keys: &[],
         }]);
 
         let plan = current.diff(&desired);
@@ -1693,6 +2089,52 @@ mod tests {
                     column: "required".into(),
                 },
             ]
+        );
+        assert_eq!(plan.statements, Vec::<String>::new());
+    }
+
+    #[test]
+    fn migration_diff_blocks_foreign_key_changes_on_existing_tables() {
+        const COLUMNS: &[ColumnDef] = &[
+            ColumnDef::new("id", SqlType::Integer),
+            ColumnDef {
+                name: "task_id",
+                sql_type: SqlType::Integer,
+                nullable: false,
+                primary_key: false,
+                auto_increment: false,
+                unique: false,
+                indexed: true,
+                default_sql: None,
+            },
+        ];
+        const FOREIGN_KEYS: &[ForeignKeyDef] = &[ForeignKeyDef {
+            columns: &["task_id"],
+            references_table: "tasks",
+            references_columns: &["id"],
+        }];
+        let current = SchemaManifest::new([TableDef {
+            name: "comments",
+            columns: COLUMNS,
+            indexes: &[],
+            foreign_keys: &[],
+        }]);
+        let desired = SchemaManifest::new([TableDef {
+            name: "comments",
+            columns: COLUMNS,
+            indexes: &[],
+            foreign_keys: FOREIGN_KEYS,
+        }]);
+
+        let plan = current.diff(&desired);
+
+        assert!(!plan.is_safe());
+        assert_eq!(
+            plan.blockers,
+            vec![MigrationBlocker::AddForeignKey {
+                table: "comments".into(),
+                columns: vec!["task_id".into()],
+            }]
         );
         assert_eq!(plan.statements, Vec::<String>::new());
     }

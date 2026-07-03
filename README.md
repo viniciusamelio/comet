@@ -116,9 +116,10 @@ the consumer's side.
   `R2Object` responder.
 - `cloudflare-websocket`: `WebSocketUpgrade`, `WebSocketResponse`, and
   low-level Worker WebSocket helpers. Keep it off for HTTP-only Workers.
-- `nebula`: the experimental D1-first ORM core — entity metadata, typed
-  columns, SQL values, and deterministic SQL builders. It is fully
-  feature-gated and is not compiled unless enabled.
+- `nebula`: the experimental D1-first ORM core — `#[derive(Entity)]`, entity
+  metadata, typed columns, foreign-key metadata, SQL values, deterministic SQL
+  builders, explicit relationship helpers, query/schema lints, and migration
+  SQL generation. It is fully feature-gated and is not compiled unless enabled.
 - `nebula-d1`: D1 execution helpers for Nebula statements. This enables
   `nebula`, `cloudflare-d1`, and `serde`.
 
