@@ -116,6 +116,31 @@ Design constraints:
 - Keep generated SQL inspectable through `to_statement()`.
 - Keep raw SQL available for queries that do not fit the builder.
 
+## Query Lints
+
+Nebula query builders expose `lint()` so applications and future CLI tooling can
+spot expensive query shapes before they are shipped. The lint API is advisory:
+it does not change generated SQL and it does not run during D1 execution unless
+the application explicitly calls it.
+
+The MVP lints cover:
+
+- selects without `LIMIT`
+- filters on columns that are not primary keys, unique, explicitly indexed, or
+  the left-most column of an index
+- orderings on unindexed columns
+- updates and deletes without a `WHERE` clause
+
+Intentional cases should be explicit in code:
+
+- `allow_unbounded_select()` documents an intentionally unbounded read.
+- `allow_full_table_scan()` documents an intentional scan or unindexed sort.
+- `allow_broad_write()` documents an intentional table-wide update/delete.
+
+These lints map directly to D1 cost risks: unbounded reads and unindexed
+filters/orderings can increase rows read, while broad writes can increase rows
+written and make accidental destructive changes easier.
+
 ## Raw SQL Escape Hatch
 
 Nebula statements are intentionally plain SQL plus bind values. Apps should keep
@@ -146,10 +171,10 @@ Implemented:
 - Example task routes backed by Nebula against local D1.
 - SQL-generation benchmarks and `wrangler dev` performance smoke coverage for
   the D1-backed example route.
+- Query lints for missing limits, unindexed filters/orderings, and broad writes.
 - Unit tests for deterministic SQL and bind ordering.
 
 Next:
 
 - Derive macro package plan.
 - Migration manifest format.
-- Query lint API and optimization hints.

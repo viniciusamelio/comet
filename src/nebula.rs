@@ -171,6 +171,10 @@ impl<T> Column<T> {
         Expr {
             sql: format!("{} IS NULL", qualified_column(self.table, self.name)),
             binds: Vec::new(),
+            columns: vec![ColumnRef {
+                table: self.table,
+                name: self.name,
+            }],
         }
     }
 
@@ -178,6 +182,10 @@ impl<T> Column<T> {
         Expr {
             sql: format!("{} IS NOT NULL", qualified_column(self.table, self.name)),
             binds: Vec::new(),
+            columns: vec![ColumnRef {
+                table: self.table,
+                name: self.name,
+            }],
         }
     }
 
@@ -204,8 +212,18 @@ impl<T> Column<T> {
         Expr {
             sql: format!("{} {op} ?", qualified_column(self.table, self.name)),
             binds: vec![value.into()],
+            columns: vec![ColumnRef {
+                table: self.table,
+                name: self.name,
+            }],
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColumnRef {
+    pub table: &'static str,
+    pub name: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -276,26 +294,33 @@ impl From<&[u8]> for Value {
 pub struct Expr {
     sql: String,
     binds: Vec<Value>,
+    columns: Vec<ColumnRef>,
 }
 
 impl Expr {
     pub fn and(self, other: Expr) -> Expr {
         let mut binds = self.binds;
         binds.extend(other.binds);
+        let mut columns = self.columns;
+        columns.extend(other.columns);
 
         Expr {
             sql: format!("({}) AND ({})", self.sql, other.sql),
             binds,
+            columns,
         }
     }
 
     pub fn or(self, other: Expr) -> Expr {
         let mut binds = self.binds;
         binds.extend(other.binds);
+        let mut columns = self.columns;
+        columns.extend(other.columns);
 
         Expr {
             sql: format!("({}) OR ({})", self.sql, other.sql),
             binds,
+            columns,
         }
     }
 }
@@ -319,6 +344,15 @@ pub struct Statement {
     pub binds: Vec<Value>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryLint {
+    MissingLimit,
+    UnindexedFilter { column: ColumnRef },
+    UnindexedOrdering { column: ColumnRef },
+    BroadUpdate,
+    BroadDelete,
+}
+
 #[derive(Debug, Clone)]
 pub struct Select<E> {
     columns: Vec<&'static str>,
@@ -326,6 +360,8 @@ pub struct Select<E> {
     orderings: Vec<Ordering>,
     limit: Option<u32>,
     offset: Option<u32>,
+    allow_full_table_scan: bool,
+    allow_unbounded_select: bool,
     _entity: PhantomData<E>,
 }
 
@@ -337,6 +373,8 @@ impl<E: Entity> Select<E> {
             orderings: Vec::new(),
             limit: None,
             offset: None,
+            allow_full_table_scan: false,
+            allow_unbounded_select: false,
             _entity: PhantomData,
         }
     }
@@ -372,6 +410,42 @@ impl<E: Entity> Select<E> {
     pub fn offset(mut self, offset: u32) -> Self {
         self.offset = Some(offset);
         self
+    }
+
+    pub fn allow_full_table_scan(mut self) -> Self {
+        self.allow_full_table_scan = true;
+        self
+    }
+
+    pub fn allow_unbounded_select(mut self) -> Self {
+        self.allow_unbounded_select = true;
+        self
+    }
+
+    pub fn lint(&self) -> Vec<QueryLint> {
+        let mut lints = Vec::new();
+
+        if self.limit.is_none() && !self.allow_unbounded_select {
+            lints.push(QueryLint::MissingLimit);
+        }
+
+        if !self.allow_full_table_scan {
+            if let Some(filter) = &self.filter {
+                push_unindexed_filter_lints::<E>(&mut lints, &filter.columns);
+            }
+
+            for ordering in &self.orderings {
+                push_unindexed_ordering_lint::<E>(
+                    &mut lints,
+                    ColumnRef {
+                        table: ordering.table,
+                        name: ordering.column,
+                    },
+                );
+            }
+        }
+
+        lints
     }
 
     pub fn to_statement(self) -> Statement {
@@ -473,6 +547,8 @@ pub struct Update<E> {
     assignments: Vec<(&'static str, Value)>,
     filter: Option<Expr>,
     returning: Vec<&'static str>,
+    allow_full_table_scan: bool,
+    allow_broad_write: bool,
     _entity: PhantomData<E>,
 }
 
@@ -482,6 +558,8 @@ impl<E: Entity> Update<E> {
             assignments: Vec::new(),
             filter: None,
             returning: Vec::new(),
+            allow_full_table_scan: false,
+            allow_broad_write: false,
             _entity: PhantomData,
         }
     }
@@ -502,6 +580,30 @@ impl<E: Entity> Update<E> {
     pub fn returning(mut self, columns: impl IntoIterator<Item = &'static str>) -> Self {
         self.returning = columns.into_iter().collect();
         self
+    }
+
+    pub fn allow_full_table_scan(mut self) -> Self {
+        self.allow_full_table_scan = true;
+        self
+    }
+
+    pub fn allow_broad_write(mut self) -> Self {
+        self.allow_broad_write = true;
+        self
+    }
+
+    pub fn lint(&self) -> Vec<QueryLint> {
+        let mut lints = Vec::new();
+
+        match &self.filter {
+            Some(filter) if !self.allow_full_table_scan => {
+                push_unindexed_filter_lints::<E>(&mut lints, &filter.columns);
+            }
+            None if !self.allow_broad_write => lints.push(QueryLint::BroadUpdate),
+            _ => {}
+        }
+
+        lints
     }
 
     pub fn to_statement(self) -> Statement {
@@ -533,6 +635,8 @@ impl<E: Entity> Update<E> {
 #[derive(Debug, Clone)]
 pub struct Delete<E> {
     filter: Option<Expr>,
+    allow_full_table_scan: bool,
+    allow_broad_write: bool,
     _entity: PhantomData<E>,
 }
 
@@ -540,6 +644,8 @@ impl<E: Entity> Delete<E> {
     fn new() -> Self {
         Self {
             filter: None,
+            allow_full_table_scan: false,
+            allow_broad_write: false,
             _entity: PhantomData,
         }
     }
@@ -547,6 +653,30 @@ impl<E: Entity> Delete<E> {
     pub fn where_(mut self, filter: Expr) -> Self {
         self.filter = Some(filter);
         self
+    }
+
+    pub fn allow_full_table_scan(mut self) -> Self {
+        self.allow_full_table_scan = true;
+        self
+    }
+
+    pub fn allow_broad_write(mut self) -> Self {
+        self.allow_broad_write = true;
+        self
+    }
+
+    pub fn lint(&self) -> Vec<QueryLint> {
+        let mut lints = Vec::new();
+
+        match &self.filter {
+            Some(filter) if !self.allow_full_table_scan => {
+                push_unindexed_filter_lints::<E>(&mut lints, &filter.columns);
+            }
+            None if !self.allow_broad_write => lints.push(QueryLint::BroadDelete),
+            _ => {}
+        }
+
+        lints
     }
 
     pub fn to_statement(self) -> Statement {
@@ -595,6 +725,40 @@ fn append_returning(mut sql: String, returning: Vec<&'static str>) -> String {
     }
 
     sql
+}
+
+fn push_unindexed_filter_lints<E: Entity>(lints: &mut Vec<QueryLint>, columns: &[ColumnRef]) {
+    for &column in columns {
+        if !is_indexed::<E>(column) {
+            push_unique_lint(lints, QueryLint::UnindexedFilter { column });
+        }
+    }
+}
+
+fn push_unindexed_ordering_lint<E: Entity>(lints: &mut Vec<QueryLint>, column: ColumnRef) {
+    if !is_indexed::<E>(column) {
+        push_unique_lint(lints, QueryLint::UnindexedOrdering { column });
+    }
+}
+
+fn push_unique_lint(lints: &mut Vec<QueryLint>, lint: QueryLint) {
+    if !lints.contains(&lint) {
+        lints.push(lint);
+    }
+}
+
+fn is_indexed<E: Entity>(column: ColumnRef) -> bool {
+    if column.table != E::TABLE.name {
+        return false;
+    }
+
+    E::TABLE.columns.iter().any(|definition| {
+        definition.name == column.name
+            && (definition.primary_key || definition.unique || definition.indexed)
+    }) || E::TABLE
+        .indexes
+        .iter()
+        .any(|index| index.columns.first() == Some(&column.name))
 }
 
 #[cfg(feature = "nebula-d1")]
@@ -696,7 +860,9 @@ pub mod d1 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Column, ColumnDef, Entity, IndexDef, SqlType, TableDef, Value};
+    use super::{
+        Column, ColumnDef, ColumnRef, Entity, IndexDef, QueryLint, SqlType, TableDef, Value,
+    };
 
     struct Task;
 
@@ -826,5 +992,94 @@ mod tests {
         let statement = Task::select().columns(["weird\"name"]).to_statement();
 
         assert_eq!(statement.sql, "SELECT \"weird\"\"name\" FROM \"tasks\"");
+    }
+
+    #[test]
+    fn select_lints_missing_limit_and_unindexed_columns() {
+        let lints = Task::select()
+            .where_(Task::TITLE.like("%docs%"))
+            .order_by(Task::CREATED_AT.desc())
+            .lint();
+
+        assert_eq!(
+            lints,
+            vec![
+                QueryLint::MissingLimit,
+                QueryLint::UnindexedFilter {
+                    column: ColumnRef {
+                        table: "tasks",
+                        name: "title",
+                    },
+                },
+                QueryLint::UnindexedOrdering {
+                    column: ColumnRef {
+                        table: "tasks",
+                        name: "created_at",
+                    },
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn select_lints_accept_indexed_limited_queries() {
+        let lints = Task::select()
+            .where_(Task::DONE.eq(false))
+            .order_by(Task::ID.asc())
+            .limit(25)
+            .lint();
+
+        assert_eq!(lints, Vec::new());
+    }
+
+    #[test]
+    fn select_lints_support_explicit_escape_hatches() {
+        let lints = Task::select()
+            .where_(Task::TITLE.like("%docs%"))
+            .order_by(Task::CREATED_AT.desc())
+            .allow_full_table_scan()
+            .allow_unbounded_select()
+            .lint();
+
+        assert_eq!(lints, Vec::new());
+    }
+
+    #[test]
+    fn write_lints_flag_broad_writes() {
+        assert_eq!(
+            Task::update().set(Task::DONE, true).lint(),
+            vec![QueryLint::BroadUpdate]
+        );
+        assert_eq!(Task::delete().lint(), vec![QueryLint::BroadDelete]);
+    }
+
+    #[test]
+    fn write_lints_support_explicit_escape_hatches() {
+        assert_eq!(
+            Task::update()
+                .set(Task::DONE, true)
+                .allow_broad_write()
+                .lint(),
+            Vec::new()
+        );
+        assert_eq!(Task::delete().allow_broad_write().lint(), Vec::new());
+    }
+
+    #[test]
+    fn write_lints_flag_unindexed_filters_once() {
+        let lints = Task::update()
+            .set(Task::DONE, true)
+            .where_(Task::TITLE.eq("docs").and(Task::TITLE.like("%docs%")))
+            .lint();
+
+        assert_eq!(
+            lints,
+            vec![QueryLint::UnindexedFilter {
+                column: ColumnRef {
+                    table: "tasks",
+                    name: "title",
+                },
+            }]
+        );
     }
 }
