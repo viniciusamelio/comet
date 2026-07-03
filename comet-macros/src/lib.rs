@@ -68,6 +68,13 @@ fn expand_entity(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
             primary_key_count += 1;
         }
 
+        if options.auto_increment && !is_integer_type(&field.ty) {
+            return Err(syn::Error::new_spanned(
+                field.ty,
+                "Nebula `auto`/`auto_increment` requires an integer field type",
+            ));
+        }
+
         let sql_type = sql_type_tokens(&field.ty, &comet)?;
         let const_ident = format_ident!("{}", to_upper_snake_case(&field_ident.to_string()));
         let column_name_lit = LitStr::new(&column_name, Span::call_site());
@@ -359,6 +366,15 @@ fn sql_type_tokens(ty: &Type, comet: &Path) -> Result<proc_macro2::TokenStream> 
     };
 
     Ok(sql_type)
+}
+
+fn is_integer_type(ty: &Type) -> bool {
+    type_ident(ty).is_some_and(|ident| {
+        matches!(
+            ident.to_string().as_str(),
+            "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize"
+        )
+    })
 }
 
 fn type_ident(ty: &Type) -> Option<&Ident> {

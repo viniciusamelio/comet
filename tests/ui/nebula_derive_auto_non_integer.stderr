@@ -1,0 +1,5 @@
+error: Nebula `auto`/`auto_increment` requires an integer field type
+ --> tests/ui/nebula_derive_auto_non_integer.rs:5:9
+  |
+5 |     id: String,
+  |         ^^^^^^
