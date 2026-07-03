@@ -144,6 +144,8 @@ Implemented:
 - `nebula-d1` execution helpers for D1 prepared statements, batch execution,
   and typed result fetching.
 - Example task routes backed by Nebula against local D1.
+- SQL-generation benchmarks and `wrangler dev` performance smoke coverage for
+  the D1-backed example route.
 - Unit tests for deterministic SQL and bind ordering.
 
 Next:
@@ -151,4 +153,3 @@ Next:
 - Derive macro package plan.
 - Migration manifest format.
 - Query lint API and optimization hints.
-- SQL generation and example performance benchmarks.
