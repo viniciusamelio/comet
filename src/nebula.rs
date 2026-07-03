@@ -455,6 +455,26 @@ impl<T> Column<T> {
         self.binary("LIKE", value)
     }
 
+    /// Matches rows whose column contains `needle`, treating `needle` as a
+    /// literal substring rather than a LIKE pattern: `%`, `_`, and `\` in it
+    /// are escaped so user-supplied search text can't widen or narrow the
+    /// match beyond a plain substring search.
+    pub fn like_escaped(self, needle: impl AsRef<str>) -> Expr {
+        let pattern = format!("%{}%", escape_like_pattern(needle.as_ref()));
+
+        Expr {
+            sql: format!(
+                "{} LIKE ? ESCAPE '\\'",
+                qualified_column(self.table, self.name)
+            ),
+            binds: vec![Value::Text(pattern)],
+            columns: vec![ColumnRef {
+                table: self.table,
+                name: self.name,
+            }],
+        }
+    }
+
     pub fn is_null(self) -> Expr {
         Expr {
             sql: format!("{} IS NULL", qualified_column(self.table, self.name)),
@@ -983,6 +1003,21 @@ impl<E: Entity> Delete<E> {
 
 fn quote_ident(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+/// Escapes `\`, `%`, and `_` so `value` matches literally inside a
+/// `LIKE ... ESCAPE '\'` pattern instead of acting as SQL wildcards.
+fn escape_like_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+
+    for character in value.chars() {
+        if character == '\\' || character == '%' || character == '_' {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+
+    escaped
 }
 
 fn qualified_column(table: &str, column: &str) -> String {
@@ -1535,7 +1570,7 @@ pub mod d1 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BelongsTo, Column, ColumnDef, ColumnRef, Entity, ForeignKeyDef, HasMany, IndexDef,
+        BelongsTo, Column, ColumnDef, ColumnRef, Entity, Expr, ForeignKeyDef, HasMany, IndexDef,
         MigrationBlocker, MigrationPlan, MigrationWriteError, QueryLint, SchemaLint,
         SchemaManifest, SqlType, TableDef, Value, belongs_to, has_many,
     };
@@ -1640,6 +1675,23 @@ mod tests {
         assert_eq!(
             statement.binds,
             vec![Value::Bool(false), Value::Text("%docs%".into())]
+        );
+    }
+
+    #[test]
+    fn like_escaped_wraps_pattern_and_escapes_wildcards() {
+        let expr = Task::TITLE.like_escaped("50%_off\\sale");
+
+        assert_eq!(
+            expr,
+            Expr {
+                sql: "\"tasks\".\"title\" LIKE ? ESCAPE '\\'".into(),
+                binds: vec![Value::Text("%50\\%\\_off\\\\sale%".into())],
+                columns: vec![ColumnRef {
+                    table: "tasks",
+                    name: "title",
+                }],
+            }
         );
     }
 
