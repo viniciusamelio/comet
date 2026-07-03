@@ -1,6 +1,9 @@
 use std::pin::Pin;
 
 #[cfg(feature = "nebula")]
+extern crate self as comet;
+
+#[cfg(feature = "nebula")]
 pub mod nebula;
 
 #[cfg(feature = "native-client")]

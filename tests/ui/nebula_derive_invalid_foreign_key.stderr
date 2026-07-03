@@ -1,0 +1,5 @@
+error: Nebula `foreign_key` must use `table.column` syntax
+ --> tests/ui/nebula_derive_invalid_foreign_key.rs:5:28
+  |
+5 |     #[nebula(foreign_key = "users")]
+  |                            ^^^^^^^

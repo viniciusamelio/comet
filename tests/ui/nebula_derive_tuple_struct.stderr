@@ -1,0 +1,5 @@
+error: Nebula Entity can only be derived for structs with named fields
+ --> tests/ui/nebula_derive_tuple_struct.rs:3:8
+  |
+3 | struct TaskRow(i64, String);
+  |        ^^^^^^^

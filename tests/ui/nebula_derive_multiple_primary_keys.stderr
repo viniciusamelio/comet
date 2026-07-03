@@ -1,0 +1,5 @@
+error: Nebula Entity supports at most one primary key in the derive MVP
+ --> tests/ui/nebula_derive_multiple_primary_keys.rs:3:8
+  |
+3 | struct TaskRow {
+  |        ^^^^^^^

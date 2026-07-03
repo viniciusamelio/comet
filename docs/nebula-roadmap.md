@@ -21,12 +21,14 @@ an ergonomic data layer without adding hidden request-time cost to Comet.
 - A fully general relational mapper with implicit joins and lazy loading.
 - Query planning that hides D1's rows-read/rows-written cost model.
 
-## Intended Shape
+## Entity Derive
 
-The long-term API should come from a derive macro:
+Nebula exposes `#[derive(comet::nebula::Entity)]` behind the `nebula` feature.
+The derive macro lives in the `comet-macros` proc-macro crate and is reexported
+from `comet::nebula`.
 
 ```rust
-#[derive(nebula::Entity)]
+#[derive(comet::nebula::Entity)]
 #[nebula(table = "tasks")]
 pub struct Task {
     #[nebula(primary_key, auto)]
@@ -38,9 +40,58 @@ pub struct Task {
     #[nebula(index)]
     pub done: bool,
 
+    #[nebula(foreign_key = "boards.id", index)]
+    pub board_id: i64,
+
     pub created_at: String,
 }
 ```
+
+Supported MVP attributes:
+
+- Struct: `#[nebula(table = "tasks")]`
+- Struct: `#[nebula(crate = "::my_crate")]` for macro path overrides
+- Field: `#[nebula(primary_key)]`
+- Field: `#[nebula(auto)]` or `#[nebula(auto_increment)]`
+- Field: `#[nebula(index)]` or `#[nebula(indexed)]`
+- Field: `#[nebula(unique)]`
+- Field: `#[nebula(nullable)]` or `#[nebula(nullable = true)]`
+- Field: `#[nebula(default = "0")]`
+- Field: `#[nebula(rename = "created_at")]`
+- Field: `#[nebula(foreign_key = "boards.id")]`
+
+The derive supports structs with named fields. It generates typed
+`Column<T>` constants using upper-snake field names and an `Entity`
+implementation with deterministic `TableDef` metadata. The MVP emits compile
+errors for tuple/unit structs, duplicate column names, multiple primary keys,
+unsupported field types, and invalid foreign-key syntax.
+
+Foreign keys are schema metadata first. A field like
+`#[nebula(foreign_key = "boards.id", index)]` generates a local column plus a
+`FOREIGN KEY ("board_id") REFERENCES "boards" ("id")` constraint in initial
+migrations. Nebula lints foreign-key columns that are not indexed because D1
+relationship lookups and cascading-style application queries should not depend
+on table scans.
+
+Relationship helpers are explicit query-builder shortcuts, not lazy loading.
+Apps can define constants such as:
+
+```rust
+impl BoardTask {
+    pub const BOARD: comet::nebula::BelongsTo<BoardTask, Board, i64> =
+        comet::nebula::belongs_to(Self::BOARD_ID, Board::ID);
+}
+
+impl Board {
+    pub const TASKS: comet::nebula::HasMany<Board, BoardTask, i64> =
+        comet::nebula::has_many(Self::ID, BoardTask::BOARD_ID);
+}
+```
+
+`BoardTask::BOARD.select_parent(board_id)` returns a normal `Select<Board>`;
+`Board::TASKS.select_children(board_id)` returns a normal `Select<BoardTask>`.
+Callers still choose limits, ordering, execution, and raw SQL when a join or a
+hand-tuned query is better.
 
 Routes should read like ordinary Comet/Rocket code:
 
@@ -58,10 +109,8 @@ async fn list(db: comet::cloudflare::D1<DB>) -> Result<Json<Vec<Task>>, ApiError
 }
 ```
 
-The first implementation is deliberately lower-level: it exposes schema
-metadata, typed columns, SQL values, and query builders. The derive macro and
-D1 execution adapter are separate tasks in
-[`nebula-implementation-tracker.md`](nebula-implementation-tracker.md).
+The lower-level metadata APIs remain public so generated and hand-written
+entities can coexist.
 
 ## Architecture
 
@@ -77,8 +126,10 @@ Nebula should split conceptually into these layers:
 - Lints/optimization hints: warn about missing limits, unindexed filters,
   unindexed orderings, and broad writes.
 
-The MVP currently lives behind the `nebula` feature in the main crate to avoid
-workspace churn. Macro and CLI work should revisit that packaging decision.
+The runtime/core MVP lives behind the `nebula` feature in the main crate. The
+derive macro lives in `comet-macros` as a path dependency outside the Cargo
+workspace so standard project commands do not accidentally format or test the
+vendored Rocket crates.
 
 ## Migration Policy
 
@@ -100,6 +151,7 @@ Destructive changes should be blocked by default. The first safe diff set is:
 - add column with default
 - create index
 - create unique index
+- foreign-key constraints on newly-created tables
 
 ## Migration Core
 
@@ -135,6 +187,7 @@ The diff blocks:
 - changed columns
 - non-null columns without defaults
 - changed or dropped indexes
+- added, changed, or dropped foreign keys on existing tables
 
 The core writer produces Wrangler-compatible numbered migration files, for
 example:
@@ -210,6 +263,7 @@ Implemented:
 
 - `nebula` feature gate.
 - `Entity`, `TableDef`, `ColumnDef`, `IndexDef`, and `SqlType`.
+- `#[derive(comet::nebula::Entity)]` for named structs.
 - Typed `Column<T>` values.
 - `Value` bind model independent of Worker/D1 types.
 - `Select`, `Insert`, `Update`, and `Delete` builders.
@@ -219,12 +273,15 @@ Implemented:
 - Native migration SQL file writer for Wrangler-compatible `migrations/`
   directories.
 - Example task routes backed by Nebula against local D1.
+- Example relationship entities for orgs, users, boards, board tasks, and task
+  assignees.
 - SQL-generation benchmarks and `wrangler dev` performance smoke coverage for
   the D1-backed example route.
 - Query lints for missing limits, unindexed filters/orderings, and broad writes.
+- Schema lints for unindexed foreign keys.
+- Explicit `BelongsTo` and `HasMany` helpers that return `Select` builders.
 - Unit tests for deterministic SQL and bind ordering.
 
 Next:
 
-- Derive macro package plan.
 - CLI/build wrapper that discovers entities and calls the migration writer.

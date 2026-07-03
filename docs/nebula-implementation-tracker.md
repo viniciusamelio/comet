@@ -21,9 +21,10 @@ Last updated: 2026-07-03
 | Product shape and constraints | done | Roadmap documents D1-first scope, module packaging for the MVP, and no runtime migrations. |
 | Core schema/query model | done | Feature-gated MVP supports schema metadata, SQL values, and deterministic select/insert/update/delete builders. |
 | D1 execution adapter | done | Statement and explicit batch execution helpers compile behind `nebula-d1`; Worker integration executes Nebula queries against local D1. |
-| Entity derive macros | pending | Requires a proc-macro crate or workspace split. |
+| Entity derive macros | done | `comet-macros` provides `#[derive(Entity)]`, reexported by `comet::nebula`, with UI compile-fail coverage. |
 | Migration generation | done | Core manifest, initial SQL generation, safe additive diff, blockers, SQL file writer, tests, and Wrangler layout docs exist. |
 | Query optimization hints | done | Builder-level `lint()` flags missing limits, unindexed filters/orderings, and broad writes with explicit escape hatches. |
+| Relationship metadata | done | Foreign-key metadata, derive attributes, migration SQL, schema lints, relationship query helpers, macro diagnostics, and example model coverage exist. |
 | Comet example integration | done | Task routes use Nebula for D1 reads/writes while preserving queue behavior and integration coverage. |
 | Performance validation | done | SQL-generation bench exists; `wrangler dev` perf smoke covers `/tasks` through Nebula+D1; feature-gated build was audited. |
 
@@ -73,11 +74,11 @@ Goal: make entity mapping ergonomic without adding runtime reflection.
 
 | ID | Task | Status | Owner | Target files | Done when |
 | --- | --- | --- | --- | --- | --- |
-| D1 | Design derive attribute syntax | pending | unassigned | docs, macro crate | Attributes cover table name, primary keys, indexes, uniqueness, nullability, defaults, and column rename. |
-| D2 | Create proc-macro crate plan | pending | unassigned | `Cargo.toml`, workspace docs | Workspace/package split is documented before adding macro crate files. |
-| D3 | Implement `#[derive(Entity)]` MVP | pending | unassigned | macro crate | Structs generate `Entity` metadata and typed `Column<T>` constants. |
-| D4 | Improve compile errors | pending | unassigned | macro crate tests | Invalid primary keys, unsupported field types, and duplicate column names produce actionable errors. |
-| D5 | Add compile-fail tests | pending | unassigned | macro crate tests | Macro diagnostics are covered by UI tests or equivalent. |
+| D1 | Design derive attribute syntax | done | Codex 2026-07-03 | docs, macro crate | Attributes cover table name, primary keys, indexes, uniqueness, nullability, defaults, and column rename. |
+| D2 | Create proc-macro crate plan | done | Codex 2026-07-03 | `Cargo.toml`, workspace docs | Macro lives in `comet-macros` as a path dependency outside the workspace so standard `cargo fmt` does not format vendored Rocket. |
+| D3 | Implement `#[derive(Entity)]` MVP | done | Codex 2026-07-03 | macro crate | Structs generate `Entity` metadata and typed `Column<T>` constants. |
+| D4 | Improve compile errors | done | Codex 2026-07-03 | macro crate tests | Invalid primary keys, unsupported field types, and duplicate column names produce actionable errors. |
+| D5 | Add compile-fail tests | done | Codex 2026-07-03 | macro crate tests | Macro diagnostics are covered by `trybuild` UI tests. |
 
 ### E. Migration Generation
 
@@ -139,6 +140,22 @@ Nebula MVP release gate:
 - `cd examples/cloudflare-worker && npm run test:perf`
 - README and roadmap describe feature selection, raw SQL escape hatches, and
   runtime migration limits.
+
+### I. Relationships And Foreign Keys
+
+Goal: let entities express D1/SQLite relationships through compile-time schema
+metadata while keeping query execution explicit and fast.
+
+| ID | Task | Status | Owner | Target files | Done when |
+| --- | --- | --- | --- | --- | --- |
+| I1 | Add foreign-key schema metadata | done | Codex 2026-07-03 | `src/nebula.rs` | `TableDef` can describe foreign keys without runtime reflection. |
+| I2 | Generate foreign keys from derive attributes | done | Codex 2026-07-03 | `comet-macros`, tests | Fields accept `#[nebula(foreign_key = "table.column")]` and generate deterministic metadata. |
+| I3 | Emit foreign-key SQL in initial migrations | done | Codex 2026-07-03 | `src/nebula.rs`, tests | `CREATE TABLE` includes `FOREIGN KEY (...) REFERENCES ...` constraints. |
+| I4 | Make migration diffs explicit about FK changes | done | Codex 2026-07-03 | `src/nebula.rs`, tests | Adding/dropping/changing FKs on existing tables creates blockers instead of invalid SQLite SQL. |
+| I5 | Add schema lints for unindexed foreign keys | done | Codex 2026-07-03 | `src/nebula.rs`, tests | FKs whose local columns are not indexed are reported before migration/application. |
+| I6 | Add derive compile-fail coverage for FK syntax | done | Codex 2026-07-03 | `tests/ui` | Invalid relationship attributes produce actionable macro diagnostics. |
+| I7 | Design relation query helpers | done | Codex 2026-07-03 | roadmap/docs, `src/nebula.rs` | `belongs_to`/`has_many` ergonomics are specified without hiding D1 query costs. |
+| I8 | Integrate relationships into the example model | done | Codex 2026-07-03 | `examples/cloudflare-worker/src/model.rs` | Example entities show realistic ownership/containment relationships once schema exists. |
 
 ## Verification Commands
 

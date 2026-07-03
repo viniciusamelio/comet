@@ -1,0 +1,5 @@
+error: duplicate Nebula column name `title`
+ --> tests/ui/nebula_derive_duplicate_column.rs:7:5
+  |
+7 |     name: String,
+  |     ^^^^
