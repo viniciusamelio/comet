@@ -22,7 +22,7 @@ Last updated: 2026-07-03
 | Core schema/query model | done | Feature-gated MVP supports schema metadata, SQL values, and deterministic select/insert/update/delete builders. |
 | D1 execution adapter | done | Statement and explicit batch execution helpers compile behind `nebula-d1`; Worker integration executes Nebula queries against local D1. |
 | Entity derive macros | pending | Requires a proc-macro crate or workspace split. |
-| Migration generation | pending | Should run from CLI/build tooling, not Worker request runtime. |
+| Migration generation | done | Core manifest, initial SQL generation, safe additive diff, blockers, SQL file writer, tests, and Wrangler layout docs exist. |
 | Query optimization hints | done | Builder-level `lint()` flags missing limits, unindexed filters/orderings, and broad writes with explicit escape hatches. |
 | Comet example integration | done | Task routes use Nebula for D1 reads/writes while preserving queue behavior and integration coverage. |
 | Performance validation | done | SQL-generation bench exists; `wrangler dev` perf smoke covers `/tasks` through Nebula+D1; feature-gated build was audited. |
@@ -85,11 +85,15 @@ Goal: generate and validate D1/SQLite migrations outside request runtime.
 
 | ID | Task | Status | Owner | Target files | Done when |
 | --- | --- | --- | --- | --- | --- |
-| E1 | Define schema manifest format | pending | unassigned | docs, CLI/core | Entity metadata can be serialized to a deterministic manifest. |
-| E2 | Generate initial `CREATE TABLE` SQL | pending | unassigned | CLI/core | CLI can generate an initial migration from entity metadata. |
-| E3 | Implement safe schema diff MVP | pending | unassigned | CLI/core | Add-table, add-nullable/defaulted-column, and add-index diffs are generated; destructive changes are blocked. |
-| E4 | Integrate with Wrangler migrations layout | pending | unassigned | example, docs | Generated files land in a `migrations/` layout compatible with `wrangler d1 migrations apply`. |
-| E5 | Add migration tests | pending | unassigned | tests | Snapshot tests cover deterministic migration SQL. |
+| E1 | Define schema manifest format | done | Codex 2026-07-03 | docs, CLI/core | Entity metadata can be serialized to a deterministic manifest. |
+| E2 | Generate initial `CREATE TABLE` SQL | done | Codex 2026-07-03 | CLI/core | CLI can generate an initial migration from entity metadata. |
+| E3 | Implement safe schema diff MVP | done | Codex 2026-07-03 | CLI/core | Add-table, add-nullable/defaulted-column, and add-index diffs are generated; destructive changes are blocked. |
+| E4 | Integrate with Wrangler migrations layout | done | Codex 2026-07-03 | example, docs | Writer uses the `migrations/0001_*.sql` layout compatible with `wrangler d1 migrations apply`; a standalone CLI wrapper remains future work. |
+| E5 | Add migration tests | done | Codex 2026-07-03 | tests | Snapshot tests cover deterministic migration SQL. |
+| E6 | Add migration SQL file naming | done | Codex 2026-07-03 | core/tests | Migration files use deterministic `0001_slug.sql` names and reject path-like/empty names. |
+| E7 | Add migration SQL file contents writer | done | Codex 2026-07-03 | core/tests | Safe plans render semicolon-terminated SQL suitable for Wrangler D1 migrations. |
+| E8 | Add filesystem writer for migration files | done | Codex 2026-07-03 | core/tests | `MigrationPlan::write_sql_file()` creates the migrations directory and writes a numbered SQL file on native tooling targets. |
+| E9 | Guard unsafe/empty migration writes | done | Codex 2026-07-03 | core/tests | Plans with blockers or no statements fail before touching the filesystem. |
 
 ### F. Query Optimization And Safety
 
