@@ -64,7 +64,13 @@ The derive supports structs with named fields. It generates typed
 `Column<T>` constants using upper-snake field names and an `Entity`
 implementation with deterministic `TableDef` metadata. The MVP emits compile
 errors for tuple/unit structs, duplicate column names, multiple primary keys,
-unsupported field types, and invalid foreign-key syntax.
+unsupported field types, invalid foreign-key syntax, and `auto`/`auto_increment`
+on non-integer fields.
+
+Primary keys are not limited to integers. `String` maps to `TEXT` and can be a
+primary key when the app owns id generation. The `auto`/`auto_increment`
+attribute is intentionally integer-only because SQLite/D1 autoincrement
+semantics apply to integer primary keys.
 
 Foreign keys are schema metadata first. A field like
 `#[nebula(foreign_key = "boards.id", index)]` generates a local column plus a
