@@ -41,3 +41,8 @@ criterion = "0.5"
 [[bench]]
 name = "native_adapter"
 harness = false
+
+[[bench]]
+name = "nebula_sql"
+harness = false
+required-features = ["nebula"]

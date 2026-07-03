@@ -14,7 +14,7 @@ Owner values are free-form. Use `unassigned` when no agent owns the task.
 
 ## Snapshot
 
-Last updated: 2026-07-02
+Last updated: 2026-07-03
 
 | Area | Status | Notes |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ Last updated: 2026-07-02
 | Migration generation | pending | Should run from CLI/build tooling, not Worker request runtime. |
 | Query optimization hints | pending | Should flag missing indexes and dangerous scans before production. |
 | Comet example integration | done | Task routes use Nebula for D1 reads/writes while preserving queue behavior and integration coverage. |
-| Performance validation | pending | Must compare against current hand-written SQL and Comet perf baseline. |
+| Performance validation | done | SQL-generation bench exists; `wrangler dev` perf smoke covers `/tasks` through Nebula+D1; feature-gated build was audited. |
 
 ## Task List
 
@@ -119,10 +119,22 @@ Goal: ensure Nebula does not compromise Comet's request/sec or cold path.
 
 | ID | Task | Status | Owner | Target files | Done when |
 | --- | --- | --- | --- | --- | --- |
-| H1 | Add SQL generation benchmarks | pending | unassigned | benches | Query builder overhead is measured separately from D1/workerd. |
-| H2 | Add example perf comparison | pending | unassigned | example perf scripts | `/tasks` is measured before/after Nebula under `wrangler dev`. |
-| H3 | Audit feature-gated binary impact | pending | unassigned | Cargo/features docs | Comet without `nebula` has no Nebula code in the build. |
-| H4 | Define MVP release criteria | pending | unassigned | tracker/docs | MVP requires docs, tests, integration coverage, and no significant perf regression. |
+| H1 | Add SQL generation benchmarks | done | Codex 2026-07-03 | `benches/nebula_sql.rs`, `Cargo.toml` | Query builder overhead is measured separately from D1/workerd. Local run: select filtered ~1.83us, insert returning ~0.81us, update returning ~1.10us. |
+| H2 | Add example perf comparison | done | Codex 2026-07-03 | example perf scripts | `/tasks` is measured under `wrangler dev` through Nebula+D1. Local run: `GET /` ~2717 req/s, `GET /tasks` ~2302 req/s, 0 non-2xx, 0 connection errors. |
+| H3 | Audit feature-gated binary impact | done | Codex 2026-07-03 | Cargo/features docs | `cargo check --no-default-features` passes and README documents that Nebula is not compiled unless `nebula` is enabled. |
+| H4 | Define MVP release criteria | done | Codex 2026-07-03 | tracker/docs | MVP gate is documented below and requires docs, tests, integration coverage, feature-gate audit, and no significant perf regression. |
+
+Nebula MVP release gate:
+
+- `cargo fmt --check`
+- `cargo test --no-default-features --features nebula`
+- `cargo check --features cloudflare,cloudflare-d1,nebula,nebula-d1`
+- `cargo check --manifest-path examples/cloudflare-worker/Cargo.toml`
+- `cd examples/cloudflare-worker && npm run test:integration`
+- `cargo bench --bench nebula_sql --features nebula`
+- `cd examples/cloudflare-worker && npm run test:perf`
+- README and roadmap describe feature selection, raw SQL escape hatches, and
+  runtime migration limits.
 
 ## Verification Commands
 
