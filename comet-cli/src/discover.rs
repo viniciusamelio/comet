@@ -103,13 +103,13 @@ fn visit_file(
     let file = syn::parse_file(&source).with_context(|| format!("parsing {}", path.display()))?;
 
     for item in &file.items {
-        if let Item::Struct(item_struct) = item {
-            if has_entity_derive(&item_struct.attrs) {
-                entities.push(DiscoveredEntity {
-                    module_path: file_module_path.clone(),
-                    struct_name: item_struct.ident.to_string(),
-                });
-            }
+        if let Item::Struct(item_struct) = item
+            && has_entity_derive(&item_struct.attrs)
+        {
+            entities.push(DiscoveredEntity {
+                module_path: file_module_path.clone(),
+                struct_name: item_struct.ident.to_string(),
+            });
         }
     }
 

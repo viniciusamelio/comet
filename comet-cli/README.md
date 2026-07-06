@@ -11,14 +11,21 @@ Implementation status and design notes: [`docs/comet-cli-tracker.md`](../docs/co
 
 `comet-cli` isn't published to crates.io yet — same situation as the `comet`
 crate itself (see the root [README](../README.md#using-this-in-another-project)).
-Until then, build it from a checkout of this repo:
+Until then, `cargo install` can build it straight from the git repo, no
+manual clone needed — Cargo resolves the `comet = { path = ".." }`
+dependency correctly because `--git` clones the whole repository, not just
+the `comet-cli` subdirectory:
 
 ```sh
-git clone https://github.com/viniciusamelio/comet
-cargo install --path comet/comet-cli
+cargo install --git https://github.com/viniciusamelio/comet comet-cli
 ```
 
-This installs a `comet` binary on your `PATH`. Verify with `comet --help`.
+This installs a `comet` binary on your `PATH` (`cargo install` prints the
+directory if it isn't already there — typically `~/.cargo/bin`). Verify with
+`comet --help`.
+
+Prefer a local build from a checkout instead (e.g. to test uncommitted
+changes)? `cd comet-cli && cargo install --path .` works the same way.
 
 ## Quick start
 
