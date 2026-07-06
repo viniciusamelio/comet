@@ -1,5 +1,6 @@
 #[cfg(unix)]
 use std::collections::HashSet;
+#[cfg(feature = "server")]
 use std::time::Duration;
 
 #[cfg(feature = "server")]
@@ -224,10 +225,12 @@ impl Default for ShutdownConfig {
 }
 
 impl ShutdownConfig {
+    #[cfg(feature = "server")]
     pub(crate) fn grace(&self) -> Duration {
         Duration::from_secs(self.grace as u64)
     }
 
+    #[cfg(feature = "server")]
     pub(crate) fn mercy(&self) -> Duration {
         Duration::from_secs(self.mercy as u64)
     }

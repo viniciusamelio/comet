@@ -76,7 +76,9 @@ pub struct Shutdown {
 #[derive(Debug, Clone)]
 pub struct Stages {
     pub start: Shutdown,
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
     pub grace: Shutdown,
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
     pub mercy: Shutdown,
 }
 
