@@ -1,3 +1,4 @@
+#[cfg(feature = "server")]
 use std::error::Error as StdError;
 
 use crate::request::ConnectionMeta;

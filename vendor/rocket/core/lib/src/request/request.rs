@@ -41,6 +41,7 @@ pub struct Request<'r> {
     uri: Origin<'r>,
     headers: HeaderMap<'r>,
     pub(crate) version: Option<HttpVersion>,
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
     pub(crate) errors: Vec<RequestError>,
     pub(crate) connection: ConnectionMeta,
     pub(crate) state: RequestState<'r>,

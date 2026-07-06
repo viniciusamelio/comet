@@ -19,4 +19,5 @@ pub use self::io_stream::{IoHandler, IoStream};
 pub use ubyte::{ByteUnit, ToByteUnit};
 pub use self::transform::{Transform, TransformBuf};
 
+#[cfg(feature = "server")]
 pub(crate) use self::data_stream::RawStream;
