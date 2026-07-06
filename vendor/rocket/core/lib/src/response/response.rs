@@ -796,6 +796,7 @@ impl<'r> Response<'r> {
     /// the comma-separated protocol strings in `I`. Returns `Err(_)` if
     /// `protocols` is non-empty but no match was found in `self`. If `self`
     /// doesn't support any kind of upgrade, return `Ok(None)`.
+    #[cfg(feature = "server")]
     pub(crate) fn search_upgrades<'a, I: Iterator<Item = &'a str>>(
         &mut self,
         protocols: I

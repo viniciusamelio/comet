@@ -3,7 +3,7 @@ mod chain;
 mod reader_stream;
 mod join;
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "server"))]
 pub mod unix;
 
 pub use chain::Chain;
@@ -12,6 +12,7 @@ pub use reader_stream::ReaderStream;
 pub use join::join;
 
 #[track_caller]
+#[cfg(feature = "server")]
 pub fn spawn_inspect<E, F, Fut>(or: F, future: Fut)
     where F: FnOnce(&E) + Send + Sync + 'static,
           E: Send + Sync + 'static,
@@ -21,12 +22,19 @@ pub fn spawn_inspect<E, F, Fut>(or: F, future: Fut)
     tokio::spawn(future.inspect_err(or));
 }
 
-use std::{fmt, io};
+use std::fmt;
+#[cfg(feature = "server")]
+use std::io;
+#[cfg(feature = "server")]
 use std::pin::pin;
+#[cfg(feature = "server")]
 use std::future::Future;
+#[cfg(feature = "server")]
 use either::Either;
+#[cfg(feature = "server")]
 use futures::future;
 
+#[cfg(feature = "server")]
 pub trait FutureExt: Future + Sized {
     /// Await `self` or `other`, whichever finishes first.
     async fn race<B: Future>(self, other: B) -> Either<Self::Output, B::Output> {
@@ -46,6 +54,7 @@ pub trait FutureExt: Future + Sized {
     }
 }
 
+#[cfg(feature = "server")]
 impl<F: Future + Sized> FutureExt for F { }
 
 pub struct Formatter<F: Fn(&mut fmt::Formatter<'_>) -> fmt::Result>(pub F);

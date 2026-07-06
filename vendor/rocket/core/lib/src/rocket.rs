@@ -1,6 +1,8 @@
 use std::fmt;
 use std::ops::{Deref, DerefMut};
+#[cfg(feature = "server")]
 use std::sync::Arc;
+#[cfg(feature = "server")]
 use std::time::Duration;
 #[cfg(feature = "server")]
 use std::any::Any;
@@ -710,6 +712,7 @@ impl Rocket<Orbit> {
     /// grace + mercy + some buffer to determine when all connections should be
     /// closed, thus all tasks should be complete, thus all references to
     /// `Arc<Rocket>` should be dropped and we can get back a unique reference.
+    #[cfg(feature = "server")]
     async fn try_wait_shutdown(self: Arc<Self>) -> Result<Rocket<Ignite>, Arc<Self>> {
         info!("Shutting down. Waiting for shutdown fairings and pending I/O...");
         tokio::spawn({

@@ -1,4 +1,6 @@
-use std::{io, fmt};
+use std::fmt;
+#[cfg(feature = "server")]
+use std::io;
 use std::ops::RangeFrom;
 use std::sync::{Arc, atomic::Ordering};
 #[cfg(feature = "server")]
@@ -53,10 +55,11 @@ pub(crate) struct ConnectionMeta {
     pub peer_endpoint: Option<Endpoint>,
     #[cfg_attr(not(feature = "mtls"), allow(dead_code))]
     pub peer_certs: Option<Arc<Certificates<'static>>>,
-    #[cfg_attr(feature = "tls", allow(dead_code))]
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
     pub server_name: Option<String>,
 }
 
+#[cfg(feature = "server")]
 impl ConnectionMeta {
     pub fn new(
         endpoint: io::Result<Endpoint>,
@@ -1234,7 +1237,12 @@ impl<'r> Request<'r> {
 
 #[derive(Debug, Clone)]
 pub(crate) enum RequestError {
+    /// Keeps this enum non-empty without the `server` feature, which is the
+    /// only thing that ever constructs a `RequestError` today (see
+    /// `Request::from_hyp`) — nothing currently builds one from the
+    /// worker-only request path.
     #[cfg(not(feature = "server"))]
+    #[allow(dead_code)]
     Other,
     #[cfg(feature = "server")]
     InvalidUri(hyper::Uri),

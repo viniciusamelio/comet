@@ -25,9 +25,33 @@ reboot).
 Differences from a plain checkout of `core/{lib,http,codegen}`:
 
 - `[lints] workspace = true` was removed from each `Cargo.toml` (it requires
-  the full Rocket workspace root, which isn't vendored). No other changes
-  were made beyond what the two patches above apply.
+  the full Rocket workspace root, which isn't vendored).
 - `core/lib/fuzz` was dropped (unrelated to building the library).
+- 2026-07-06: a set of lint fixes was applied directly to `core/lib` (not
+  captured as a `patches/*.patch` file — see below for why) to clear the
+  warning baseline described in "Current validation". No behavior changed
+  under any feature combination; every fix either declares a cfg the crate
+  already emits/consumes (`nightly`, `broken_fmt`, `rust_analyzer`), removes
+  a genuinely unused import, or narrows an item's `#[cfg(feature = "...")]`
+  gate to match the feature its *only* caller already requires (e.g.
+  `Endpoint::fetch` is only called from `listener::{unix,tcp}`, both
+  `#[cfg(feature = "server")]` — gating the definition the same way doesn't
+  change what's compiled under `server`, only under configurations that
+  never called it in the first place). One real upstream bug was fixed
+  along the way: `ConnectionMeta::server_name`'s
+  `#[cfg_attr(feature = "tls", allow(dead_code))]` had the condition
+  backwards relative to its sibling field `peer_certs`'s
+  `#[cfg_attr(not(feature = "mtls"), allow(dead_code))]` — the field is only
+  *read* by `Request::sni()`, which is itself `#[cfg(feature = "tls")]`, so
+  the allow needed to fire in the *absence* of `tls`, not its presence.
+  This wasn't packaged as a numbered patch file because the two existing
+  patches are large, structural deltas meant to be re-applied verbatim
+  against a newer upstream commit (see "Updating this vendor drop"); this
+  change is a small, scattered set of `#[cfg(...)]` additions across ~10
+  files that doesn't survive a `git apply` re-vendor step cleanly anyway
+  (upstream will have moved the surrounding lines). Re-derive it by fixing
+  whatever the same validation commands report against the new commit
+  instead of trying to reapply this as a patch.
 
 ## Updating this vendor drop
 
@@ -63,10 +87,18 @@ object round-tripping, streaming responses, and a Worker WebSocket echo path.
 The performance test completed without request errors under local `wrangler
 dev`.
 
-The remaining Rocket warning baseline is non-blocking: native builds report
-existing `cfg(nightly)`/`rust_analyzer` check-cfg noise, and worker builds
-additionally report unused server-oriented items that are compiled but not
-exercised without the `server` feature. Native `cargo check` of the
-Cloudflare example also reports dead-code warnings because the HTTP routes are
-mounted from the wasm-only Worker entrypoint rather than from the native test
-library target.
+As of 2026-07-06, the previously-documented warning baseline was fixed (see
+the lint-fixes entry above) and re-validated:
+
+```sh
+RUSTC="$(rustup which rustc)" cargo check --manifest-path vendor/rocket/core/lib/Cargo.toml                      # server feature (Rocket's default): clean except one pre-existing `deprecated` warning (see below)
+cargo build --features cloudflare,cloudflare-d1,cloudflare-queue,cloudflare-r2,cloudflare-kv,cloudflare-service,cloudflare-hyperdrive,cloudflare-websocket   # comet's worker feature: 0 warnings
+RUSTC="$(rustup which rustc)" cargo check --manifest-path examples/cloudflare-worker/Cargo.toml --target wasm32-unknown-unknown                            # 0 warnings
+```
+
+One warning was deliberately left alone: `tcp.rs`'s `TcpStream::set_linger`
+call is deprecated by tokio (`SO_LINGER` can block the thread on drop), but
+fixing it means changing real TCP shutdown behavior on the `server` feature
+— something `comet` never builds with `server` enabled, so it's not
+something this vendoring effort can responsibly validate. Left for whoever
+next touches `listener/tcp.rs` under `server`.

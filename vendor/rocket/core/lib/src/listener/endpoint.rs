@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
+#[cfg(feature = "server")]
 use figment::Figment;
 use serde::de;
 
@@ -177,6 +178,7 @@ impl Endpoint {
     /// If the conversion succeeds, returns `Ok(value)`. If the conversion fails
     /// and `Some` value was passed in, returns an error indicating the endpoint
     /// was an invalid `kind` and otherwise returns a "missing field" error.
+    #[cfg(feature = "server")]
     pub(crate) fn fetch<T, F>(figment: &Figment, kind: &str, path: &str, f: F) -> figment::Result<T>
         where F: FnOnce(Option<&Endpoint>) -> Option<T>
     {
