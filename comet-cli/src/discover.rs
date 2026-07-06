@@ -14,8 +14,8 @@ use syn::Item;
 /// and the derive macro disagreeing about what a struct's schema is.
 /// Instead, discovery only needs enough to *reference* the struct from a
 /// generated Rust file, which then reads the struct's real,
-/// derive-generated `Entity::TABLE` by compiling and running (see the
-/// schema-dump runner planned in `docs/comet-cli-tracker.md`, area C3).
+/// derive-generated `Entity::TABLE` by compiling and running it (see
+/// `schema_dump.rs`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DiscoveredEntity {
     pub module_path: Vec<String>,

@@ -28,9 +28,8 @@ pub fn perf(args: TestArgs) -> Result<()> {
     run_step(&project_dir, "npm", &["run", "test:perf"])
 }
 
-/// Unit, then integration, then perf — the same order as the "Nebula MVP
-/// release gate" documented in `docs/nebula-implementation-tracker.md`,
-/// stopping at the first stage that fails.
+/// Unit, then integration, then perf, stopping at the first stage that
+/// fails.
 pub fn all(args: TestArgs) -> Result<()> {
     let project_dir = args.path.unwrap_or_else(|| PathBuf::from("."));
     unit(TestArgs {
