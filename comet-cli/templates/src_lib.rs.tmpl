@@ -1,0 +1,13 @@
+#[macro_use]
+extern crate rocket;
+
+mod app;
+
+// Entity-bearing contexts are `pub` so `comet migrate generate`'s schema-dump
+// binary (a separate compilation unit that only sees this crate's public
+// API) can reach `crate_name::tasks::model::TaskRow` and read its real,
+// derive-generated `TableDef`.
+pub mod tasks;
+
+#[cfg(target_arch = "wasm32")]
+mod entry;

@@ -1,0 +1,138 @@
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(
+    name = "comet",
+    version,
+    about = "Scaffold, generate, migrate, and test Comet + Nebula projects."
+)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Subcommand)]
+pub enum Command {
+    /// Scaffold a new Comet + Nebula + Cloudflare Worker project.
+    New(NewArgs),
+    /// Generate entities or route modules in an existing project.
+    #[command(subcommand)]
+    Generate(GenerateCommand),
+    /// Generate or inspect Nebula migrations.
+    #[command(subcommand)]
+    Migrate(MigrateCommand),
+    /// Run the project's test/release gate.
+    #[command(subcommand)]
+    Test(TestCommand),
+}
+
+#[derive(Args)]
+pub struct NewArgs {
+    /// Project name; also used as the crate name and D1 database name.
+    pub name: String,
+
+    /// Directory to create the project in. Defaults to `./<name>`.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+
+    /// Wrangler D1 binding name used in `wrangler.jsonc` and route code.
+    #[arg(long, default_value = "DB")]
+    pub db_binding: String,
+}
+
+#[derive(Subcommand)]
+pub enum GenerateCommand {
+    /// Generate a `#[derive(Entity)]` struct skeleton.
+    Entity(GenerateEntityArgs),
+    /// Generate a CRUD route module bound to an existing entity.
+    Route(GenerateRouteArgs),
+}
+
+#[derive(Args)]
+pub struct GenerateEntityArgs {
+    /// Singular concept name, e.g. `Board` (generates `BoardRow` in `src/boards/model.rs`).
+    pub name: String,
+
+    /// A field as `name:type[:attr[,attr]...]`, e.g. `title:string` or
+    /// `org_id:i64:foreign_key=orgs.id,index`. Repeatable. An `id` primary
+    /// key is added automatically unless one is already given.
+    #[arg(long = "field", value_name = "SPEC")]
+    pub fields: Vec<String>,
+
+    /// Table name override. Defaults to the pluralized snake_case of `name`.
+    #[arg(long)]
+    pub table: Option<String>,
+
+    /// Project directory. Defaults to the current directory.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct GenerateRouteArgs {
+    /// Entity concept name, e.g. `Board` (looks for `BoardRow` in `src/boards/model.rs`).
+    pub entity: String,
+
+    /// Wrangler D1 binding name used in the generated route code.
+    #[arg(long, default_value = "DB")]
+    pub db_binding: String,
+
+    /// Project directory. Defaults to the current directory.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+pub enum MigrateCommand {
+    /// Generate the first migration from the current entities.
+    Init(MigrateInitArgs),
+    /// Diff current entities against the last migration and generate a new one.
+    Generate(MigrateGenerateArgs),
+    /// Show pending schema changes against the last migration.
+    Status(MigrateStatusArgs),
+}
+
+#[derive(Args)]
+pub struct MigrateInitArgs {
+    /// Project directory to inspect. Defaults to the current directory.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct MigrateGenerateArgs {
+    /// Migration name, used to build its file name (e.g. `add_done` -> `0002_add_done.sql`).
+    pub name: String,
+
+    /// Project directory to inspect. Defaults to the current directory.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct MigrateStatusArgs {
+    /// Project directory to inspect. Defaults to the current directory.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+pub enum TestCommand {
+    /// `cargo fmt --check` + `cargo test --lib`.
+    Unit(TestArgs),
+    /// The project's `npm run test:integration` script.
+    Integration(TestArgs),
+    /// The project's `npm run test:perf` script.
+    Perf(TestArgs),
+    /// Unit, then integration, then perf, stopping at the first failure.
+    All(TestArgs),
+}
+
+#[derive(Args)]
+pub struct TestArgs {
+    /// Project directory to run tests in. Defaults to the current directory.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+}

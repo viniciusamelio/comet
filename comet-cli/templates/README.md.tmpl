@@ -1,0 +1,39 @@
+# {{project_name}}
+
+Scaffolded with `comet new`. A Rocket-on-Cloudflare-Workers app backed by
+Nebula and D1.
+
+## Set up the database
+
+Migrations are generated from the `#[derive(Entity)]` structs under `src/`,
+not hand-written. Generate the first one (and the schema snapshot future
+`comet migrate` calls diff against):
+
+```sh
+comet migrate init
+```
+
+Then apply it locally:
+
+```sh
+npx wrangler d1 migrations apply {{db_binding}} --local
+```
+
+## Develop
+
+```sh
+npm install
+npm run dev
+```
+
+## Deploy
+
+```sh
+npm run deploy
+```
+
+## Changing the schema
+
+Add entities with `comet generate entity <Name>`, then run
+`comet migrate generate <name>` to turn schema changes into a new migration
+file. `comet migrate status` shows pending changes without writing anything.

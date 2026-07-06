@@ -1,0 +1,11 @@
+//! Wasm-only glue between the Cloudflare Worker runtime and the Rocket app.
+use worker::{event, Context, Env, Request, Response, Result};
+
+use crate::app::rocket;
+
+#[event(fetch)]
+pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
+    console_error_panic_hook::set_once();
+
+    comet::cloudflare::fetch(req, env, ctx, rocket).await
+}

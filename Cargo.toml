@@ -22,6 +22,7 @@ cloudflare-service = ["cloudflare"]
 cloudflare-websocket = ["cloudflare"]
 nebula = ["dep:comet-macros"]
 nebula-d1 = ["nebula", "cloudflare-d1", "dep:serde"]
+nebula-schema = ["nebula", "dep:serde"]
 native-client = ["dep:rocket"]
 
 [dependencies]
@@ -33,12 +34,13 @@ async-stream = { version = "0.3", optional = true }
 futures-channel = { version = "0.3", optional = true }
 futures-util = "0.3"
 bytes = "1"
-serde = { version = "1", optional = true }
+serde = { version = "1", optional = true, features = ["derive"] }
 comet-macros = { path = "comet-macros", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
 trybuild = "1"
+serde_json = "1"
 
 [[bench]]
 name = "native_adapter"

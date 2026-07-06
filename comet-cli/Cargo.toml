@@ -1,0 +1,21 @@
+[package]
+name = "comet-cli"
+version = "0.1.0"
+edition = "2024"
+description = "Scaffold Comet + Nebula projects, generate entities/routes, drive migrations, and run the test/release gate."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/viniciusamelio/comet"
+
+[[bin]]
+name = "comet"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+syn = { version = "2", features = ["full"] }
+quote = "1"
+toml = "0.8"
+serde_json = "1"
+tempfile = "3"
+comet = { path = "..", default-features = false, features = ["nebula-schema"] }

@@ -1,0 +1,13 @@
+{
+  "name": "{{project_name}}",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "RUSTC=\"$(rustup which rustc)\" \"$(rustup which cargo)\" check --target wasm32-unknown-unknown",
+    "test": "cargo test --lib"
+  },
+  "devDependencies": {
+    "wrangler": "4.106.0"
+  }
+}

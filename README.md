@@ -122,6 +122,19 @@ the consumer's side.
   SQL generation. It is fully feature-gated and is not compiled unless enabled.
 - `nebula-d1`: D1 execution helpers for Nebula statements. This enables
   `nebula`, `cloudflare-d1`, and `serde`.
+- `nebula-schema`: an owned, serializable mirror of Nebula's schema metadata
+  (`comet::nebula::schema`), for tooling that needs to persist a schema
+  snapshot to disk and diff it later — this is what
+  [`comet-cli`](comet-cli/README.md)'s `comet migrate` commands use. Enables
+  `nebula` and `serde`; does not require `cloudflare`/`worker`.
+
+## comet-cli
+
+A CLI (binary name `comet`) that scaffolds Comet + Nebula projects, generates
+entities and CRUD routes, drives migration generation, and runs a project's
+test gate. See [`comet-cli/README.md`](comet-cli/README.md) for install and
+usage, and [`docs/comet-cli-roadmap.md`](docs/comet-cli-roadmap.md) for the
+full command reference.
 
 ## Development
 

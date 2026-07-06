@@ -1,0 +1,58 @@
+use rocket::serde::{Deserialize, Serialize};
+
+/// A task as returned to API clients.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(crate = "rocket::serde")]
+pub struct Task {
+    pub id: i32,
+    pub title: String,
+    pub done: bool,
+    pub created_at: String,
+}
+
+/// The shape of a task row as it comes back from D1.
+///
+/// D1/SQLite has no boolean storage class, so `done` round-trips as an
+/// integer. This type exists to isolate that quirk from the `Task` type
+/// served to clients.
+#[derive(Debug, Clone, Deserialize, comet::nebula::Entity)]
+#[nebula(table = "tasks")]
+#[serde(crate = "rocket::serde")]
+pub struct TaskRow {
+    #[nebula(primary_key, auto, unique, index)]
+    pub id: i32,
+    pub title: String,
+    #[nebula(default = "0")]
+    pub done: i32,
+    #[nebula(default = "datetime('now')")]
+    pub created_at: String,
+}
+
+impl From<TaskRow> for Task {
+    fn from(row: TaskRow) -> Self {
+        Task {
+            id: row.id,
+            title: row.title,
+            done: row.done != 0,
+            created_at: row.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(crate = "rocket::serde")]
+pub struct NewTask {
+    pub title: String,
+}
+
+impl NewTask {
+    /// Trims the title and rejects blank input.
+    pub fn validated_title(&self) -> Result<&str, &'static str> {
+        let title = self.title.trim();
+        if title.is_empty() {
+            Err("title must not be blank")
+        } else {
+            Ok(title)
+        }
+    }
+}
