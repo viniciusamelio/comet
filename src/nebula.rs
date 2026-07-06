@@ -282,7 +282,7 @@ impl TableDef {
             .filter(|column| !is_indexed_in_table(*self, column))
             .map(|column| SchemaLint::UnindexedForeignKey {
                 table: self.name,
-                column: *column,
+                column,
             })
             .collect()
     }

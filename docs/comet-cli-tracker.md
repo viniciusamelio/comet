@@ -129,7 +129,7 @@ MVP.
 
 | ID | Task | Status | Owner | Target files | Done when |
 | --- | --- | --- | --- | --- | --- |
-| G1 | Write `comet-cli` README | done | Claude 2026-07-03 | `comet-cli/README.md` | Covers install (via git checkout + `cargo install --path`, matching `comet`'s own not-yet-on-crates.io status — not the aspirational `cargo install comet-cli` originally written here), quick start for all five capabilities (new/entity/route/migrate/test), and the raw-SQL/manual-wiring/hand-written-migration/non-generated-context escape hatches. |
+| G1 | Write `comet-cli` README | done | Claude 2026-07-03 | `comet-cli/README.md` | Covers install and quick start for all five capabilities (new/entity/route/migrate/test), plus the raw-SQL/manual-wiring/hand-written-migration/non-generated-context escape hatches. Install instructions revised 2026-07-06: no manual `git clone` needed — `cargo install --git https://github.com/viniciusamelio/comet comet-cli` works directly (verified against the real, pushed remote, against the `nebula` branch specifically via `--branch nebula` — installed and ran `comet --version`/`--help` successfully). This works despite the repo having no `[workspace]`: `--git` clones the whole repository, so `comet-cli`'s `comet = { path = ".." }` dependency still resolves, and cargo's git-install package resolution finds `comet-cli/Cargo.toml` by name within the clone. The README omits `--branch nebula` on the assumption `comet-cli` merges to `master` before anyone relies on this instruction; re-add it (or pin `--tag`/`--rev`) if that's not yet true when someone hits this. |
 | G2 | Cross-link trackers | done | Claude 2026-07-03 | `docs/nebula-implementation-tracker.md` | Task E4 ("a standalone CLI wrapper remains future work") updated to record that it shipped 2026-07-03 as `comet-cli`, pointing at this tracker. |
 | G3 | Define CLI release gate | done | Claude 2026-07-03 | this file (see below) | Analogous "release gate" section added below, covering both crates (`comet-cli` itself, and a scaffolded fixture project). |
 
@@ -139,38 +139,50 @@ Mirrors the "Nebula MVP release gate" in `docs/nebula-implementation-tracker.md`
 scoped to `comet-cli`:
 
 ```sh
-# comet-cli itself
 cd comet-cli
 cargo fmt --check
+cargo clippy --all-targets
 cargo test
-
-# A scaffolded fixture project exercises every command against real output,
-# not just comet-cli's own unit tests. Point the fixture's `comet`/`rocket`
-# dependencies at this repo's local paths first (git deps require a public
-# remote and won't reflect uncommitted core changes):
-comet new fixture --path /tmp/fixture
-# edit /tmp/fixture/Cargo.toml: comet/rocket -> path = "<this repo>"/"<this repo>/vendor/rocket/core/lib"
-comet migrate init --path /tmp/fixture
-comet generate entity Board --field title:string --path /tmp/fixture
-comet generate route Board --path /tmp/fixture
-# wire the printed lines into /tmp/fixture/src/lib.rs and src/app.rs by hand
-comet migrate generate add_boards --path /tmp/fixture
-cd /tmp/fixture
-RUSTC="$(rustup which rustc)" cargo check --target wasm32-unknown-unknown
-cargo fmt --check
-comet test unit --path /tmp/fixture
+bash tests/e2e.sh
 ```
 
-All of the above passed as of 2026-07-03 (see the `done` rows in areas B–F
-for exactly what each step verified). Not yet automated as a single script
-or CI job — every run so far has been manual, documented inline in this
-tracker as it happened. `cargo publish --dry-run` is blocked on the same
-issue blocking `comet` itself: the vendored Rocket fork has no public,
-versioned home yet (see the root README and
-`docs/rocket-worker-roadmap.md`), so packaging would silently swap in
-unpatched Rocket. `cargo clippy` was not run as part of this gate — it's a
-reasonable follow-up but wasn't part of any task's done-when criteria to
-date.
+`cargo clippy --all-targets` added 2026-07-03: it was clean except one
+`collapsible_if` in `discover.rs`, fixed using a `let`-chain (stable on this
+crate's edition 2024). The same pass on the core `comet` crate under
+`--no-default-features --features nebula-schema --lib --tests` found one
+`explicit_auto_deref` in `src/nebula.rs`'s pre-existing `TableDef::lint`,
+also fixed. (`--all-targets` on `comet` itself isn't clean — `benches/*.rs`
+need feature combinations `nebula-schema` doesn't provide; that's a
+pre-existing gap unrelated to this work, not something to paper over here.)
+
+`tests/e2e.sh` (added 2026-07-03) scripts the manual verification cycle
+previously described here by hand: builds `comet-cli`, scaffolds a fixture
+project, points its `comet`/`rocket` dependencies at this repo checkout
+(rewriting the `git = "..."` deps to `path = "..."` — git deps would need a
+public remote and wouldn't reflect uncommitted core changes), then drives
+`migrate init` → adds a nullable column → `migrate status` (asserts the
+pending `ALTER TABLE` is reported) → `migrate generate` (asserts the file
+and its contents) → `migrate status` again (asserts "up to date") → makes a
+destructive change and asserts `migrate generate` refuses it, exits
+non-zero, and writes no file → `generate entity`/`generate route` → wires
+the printed lines into `lib.rs`/`app.rs` via `python3` (used for precise,
+un-escaped edits to Rust source — the same reason `tests/perf.sh` elsewhere
+in this repo already uses `python3 -c` instead of fighting `sed`) → asserts
+`cargo check --target wasm32-unknown-unknown` and `cargo fmt --check` both
+pass on the result → `comet test unit` → asserts `comet test integration`
+fails loudly with npm's own "Missing script" message, since a fresh scaffold
+doesn't define one. Passed end-to-end on first correct run (an early draft
+had a marker string that matched both the `Task` and `TaskRow` structs in
+the template, since both end with the same `created_at` field — caught
+by the script itself failing loudly with a real Rust compile error, not
+silently).
+
+Not yet wired into an actual CI workflow file (no `.github/workflows/` exists
+in this repo yet) — `tests/e2e.sh` is runnable locally and is the artifact a
+CI job would call. `cargo publish --dry-run` stays blocked on the same issue
+blocking `comet` itself: the vendored Rocket fork has no public, versioned
+home yet (see the root README and `docs/rocket-worker-roadmap.md`), so
+packaging would silently swap in unpatched Rocket.
 
 ## Suggested Build Order
 
