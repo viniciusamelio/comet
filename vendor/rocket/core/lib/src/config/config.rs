@@ -1,5 +1,7 @@
 use figment::{Figment, Profile, Provider, Metadata, error::Result};
-use figment::providers::{Serialized, Env, Toml, Format};
+use figment::providers::Serialized;
+#[cfg(not(feature = "worker"))]
+use figment::providers::{Env, Toml, Format};
 use figment::value::{Map, Dict, magic::RelativePathBuf};
 use serde::{Deserialize, Serialize};
 
