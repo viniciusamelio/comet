@@ -1,0 +1,309 @@
+---
+title: Nebula ORM
+description: O núcleo de ORM D1-first do Comet — entidades, colunas tipadas, query builder, relacionamentos e migrations.
+---
+
+**Nebula** é o núcleo de ORM D1-first embutido no crate `comet`
+(`src/nebula/`), pensado para dar a aplicações Comet uma camada de dados
+ergonômica sem custo escondido em tempo de requisição. É inteiramente
+opcional — nada dele é compilado a menos que a feature `nebula` esteja
+ligada.
+
+## Filosofia
+
+- Manter o código de rota próximo da ergonomia normal do Rocket.
+- Tratar o **D1** (compatível com SQLite) como o backend de primeira classe —
+  sem camada de abstração entre bancos.
+- Gerar **SQL determinístico com valores de bind explícitos** — sem reflexão
+  em tempo de execução, sem "mágica" de query planner.
+- Gerar migrations **fora** do tratamento de requisições do Worker — nunca em
+  tempo de requisição.
+- Manter o caminho quente do Comet livre do Nebula a menos que a feature
+  esteja ligada.
+- Preservar uma via de escape para SQL puro para qualquer coisa que o
+  builder não modele (CTEs recursivas, FTS, planos ajustados à mão).
+
+**Não-objetivos deliberados**: nenhuma sincronização de schema em tempo de
+execução, nenhuma migration automática de produção de dentro de um Worker,
+nenhuma portabilidade entre bancos, nenhum mapeador relacional genérico com
+joins implícitos ou lazy loading, e nenhum planejamento de query que esconda
+o custo de linhas lidas/escritas do D1.
+
+## `#[derive(Entity)]`
+
+Definida em `comet-macros`, reexportada como `comet::nebula::Entity`. Só
+funciona em structs com campos nomeados.
+
+**Atributos no nível da struct** (`#[nebula(...)]` na struct):
+
+- `table = "tasks"` — nome da tabela (padrão: snake_case do nome da struct).
+- `crate = "::my_crate"` — caminho usado para referenciar `comet` no código
+  gerado.
+
+**Atributos no nível do campo**:
+
+| Atributo | Efeito |
+|---|---|
+| `primary_key` | Marca a coluna como `PRIMARY KEY` (no máximo uma por entidade). |
+| `auto` / `auto_increment` | Adiciona `AUTOINCREMENT`; exige um campo inteiro. |
+| `unique` | Adiciona a constraint `UNIQUE`. |
+| `index` / `indexed` | Gera um índice de coluna única na migration. |
+| `nullable` / `nullable = true\|false` | Controla `NOT NULL`. |
+| `default = "0"` | Expressão de default SQL (`DEFAULT <expr>`). |
+| `rename = "created_at"` | Nome da coluna, se diferente do campo. |
+| `foreign_key = "boards.id"` | Sintaxe `tabela.coluna`; gera a metadata de FK e, em migrations, `FOREIGN KEY (...) REFERENCES ...`. |
+
+Mapeamento de tipo Rust → `SqlType`: inteiros (`i8..i64`, `u8..u64`,
+`isize`/`usize`) → `Integer`; `f32`/`f64` → `Real`; `String`/`str` → `Text`;
+`Vec` → `Blob`; `bool` → `Boolean`. Qualquer outro tipo é erro de compilação.
+Chaves primárias não precisam ser inteiras — `String` funciona para IDs
+definidos pela aplicação — mas `auto`/`auto_increment` exige um campo
+inteiro.
+
+```rust
+#[derive(comet::nebula::Entity)]
+#[nebula(table = "tasks")]
+pub struct Task {
+    #[nebula(primary_key, auto)]
+    pub id: i64,
+
+    #[nebula(index)]
+    pub title: String,
+
+    #[nebula(index)]
+    pub done: bool,
+
+    #[nebula(foreign_key = "boards.id", index)]
+    pub board_id: i64,
+
+    pub created_at: String,
+}
+```
+
+Isso gera constantes associadas `Task::ID`, `Task::TITLE`, `Task::DONE`,
+`Task::BOARD_ID`, `Task::CREATED_AT` (todas `Column<T>`) e um
+`impl Entity for Task` com uma `const TABLE: TableDef`.
+
+<Callout type="warn">
+  D1/SQLite não tem um tipo de armazenamento booleano nativo. Booleans viram
+  `INTEGER` (0/1) no schema gerado, mas continuam sendo rastreados como seu
+  próprio `SqlType` para as ferramentas.
+</Callout>
+
+## `Column<T>`: API de coluna tipada
+
+`Column<T>` é um handle tipado (via `PhantomData`), construível em `const`,
+carregando a tabela e o nome da coluna. Métodos de comparação constroem um
+`Expr` (fragmento SQL + valores de bind + colunas referenciadas):
+
+- `eq`, `ne`, `gt`, `gte`, `lt`, `lte` — cada um recebe `impl Into<Value>`.
+- `like(value)` — `LIKE ?` cru.
+- `like_escaped(needle)` — envolve `needle` em `%...%` e escapa `\`, `%`, `_`,
+  para que input do usuário não consiga injetar wildcards.
+- `is_null` / `is_not_null`.
+- `asc()` / `desc()` — constroem um `Ordering` para `ORDER BY`.
+
+```rust
+let expr = Task::TITLE.like_escaped("50%_off\\sale");
+// sql:   "tasks"."title" LIKE ? ESCAPE '\'
+// binds: [Value::Text("%50\%\_off\\sale%")]
+
+let filter = Task::DONE.eq(false).and(Task::TITLE.like("%docs%"));
+```
+
+`Expr` suporta `.and(other)` / `.or(other)`, combinando SQL como
+`(esquerda) AND (direita)` e mesclando binds/colunas na ordem. Identificadores
+são sempre citados entre aspas duplas.
+
+## `Value` e tipos SQL
+
+```rust
+pub enum Value {
+    Null,
+    Integer(i64),
+    Real(f64),
+    Text(String),
+    Blob(Vec<u8>),
+    Bool(bool),
+}
+```
+
+`From` está implementado para `i64`/`i32`/`u32` → `Integer`, `f64` → `Real`,
+`bool` → `Bool`, `String`/`&str` → `Text`, `Vec<u8>`/`&[u8]` → `Blob`.
+`SqlType` mapeia tipos de campo Rust para tipos de coluna SQL na DDL:
+`Integer`→`INTEGER`, `Real`→`REAL`, `Text`→`TEXT`, `Blob`→`BLOB`,
+`Boolean`→`INTEGER`.
+
+## Query builder
+
+`Entity` fornece `select()`, `insert()`, `update()`, `delete()`, todos
+terminando em `.to_statement()` → `Statement { sql: String, binds: Vec<Value> }`.
+**Não há joins** — Nebula não é um mapeador relacional totalmente genérico.
+
+```rust
+let statement = Task::select()
+    .where_(Task::DONE.eq(false))
+    .and_where(Task::TITLE.like("%docs%"))
+    .order_by(Task::CREATED_AT.desc())
+    .limit(50)
+    .offset(10)
+    .to_statement();
+// SELECT "id", "title", "done", "created_at" FROM "tasks"
+// WHERE ("tasks"."done" = ?) AND ("tasks"."title" LIKE ?)
+// ORDER BY "tasks"."created_at" DESC LIMIT ? OFFSET ?
+```
+
+`Select` também suporta `.columns([...])` para projetar um subconjunto,
+`.allow_full_table_scan()` e `.allow_unbounded_select()` (vias de escape para
+os lints, veja abaixo).
+
+```rust
+Task::insert()
+    .set(Task::TITLE, "write tests")
+    .set(Task::DONE, false)
+    .returning(["id", "title", "done", "created_at"])
+    .to_statement();
+// INSERT INTO "tasks" ("title", "done") VALUES (?, ?)
+// RETURNING "id", "title", "done", "created_at"
+
+Task::update()
+    .set(Task::DONE, true)
+    .where_(Task::ID.eq(42))
+    .to_statement();
+// UPDATE "tasks" SET "done" = ? WHERE "tasks"."id" = ?
+
+Task::delete().where_(Task::ID.eq(42)).to_statement();
+// DELETE FROM "tasks" WHERE "tasks"."id" = ?
+```
+
+A ordem dos binds é sempre determinística: binds de assignment/filtro
+primeiro, depois `LIMIT`/`OFFSET` no final.
+
+## Relacionamentos
+
+Relacionamentos são **atalhos explícitos de query builder, não lazy loading
+nem joins implícitos**. Dois wrappers genéricos, construídos via
+`belongs_to()`/`has_many()`, associam uma coluna local a uma coluna
+estrangeira:
+
+```rust
+impl Task {
+    const BOARD: BelongsTo<Task, Board, i64> = belongs_to(Self::ID, Board::ID);
+}
+impl Board {
+    const TASKS: HasMany<Board, Task, i64> = has_many(Self::ID, Task::ID);
+}
+```
+
+- `BelongsTo::select_parent(local_value)` retorna um `Select<Parent>` normal
+  (`Parent::select().where_(foreign_column.eq(local_value)).limit(1)`).
+- `HasMany::select_children(parent_value)` retorna um `Select<Child>` — quem
+  chama ainda escolhe limite/ordenação.
+
+```rust
+let statement = Task::BOARD.select_parent(42).to_statement();
+// SELECT "id", "name" FROM "boards" WHERE "boards"."id" = ? LIMIT ?
+
+let statement = Board::TASKS.select_children(7)
+    .order_by(Task::ID.asc())
+    .limit(50)
+    .to_statement();
+```
+
+## Geração de migrations
+
+`SchemaManifest` (um `Vec<TableDef>` ordenado) é o motor de migrations:
+
+- `initial_migration()` → `Vec<String>` de `CREATE TABLE`/`CREATE INDEX` para
+  um schema do zero.
+- `diff(&desired)` → `MigrationPlan { statements, blockers }`, um diff
+  aditivo seguro.
+- `to_manifest_string()` → um snapshot de texto determinístico (para
+  testes/ferramentas, não SQL).
+- `lint()` → `Vec<SchemaLint>`.
+
+```
+CREATE TABLE "tasks" ("id" INTEGER PRIMARY KEY AUTOINCREMENT,
+  "title" TEXT NOT NULL, "done" INTEGER NOT NULL, "created_at" TEXT NOT NULL)
+CREATE INDEX "idx_tasks_done_created_at" ON "tasks" ("done", "created_at")
+```
+
+**Diffs seguros** (viram SQL automaticamente): tabelas faltando, colunas
+nullable, colunas com default, índices/índices únicos faltando — por exemplo
+`ALTER TABLE "tasks" ADD COLUMN "done" INTEGER NOT NULL DEFAULT 0`.
+
+**Diffs bloqueados** (retornam um `MigrationBlocker`, exigindo revisão
+humana, sem SQL emitido): `DropTable`, `DropColumn`, `ChangeColumn`,
+`UnsafeAddColumn` (coluna não-nula sem default), `DropIndex`/`ChangeIndex`,
+`AddForeignKey`/`DropForeignKey`/`ChangeForeignKey` em tabelas existentes.
+`MigrationPlan::is_safe()` é `blockers.is_empty()`.
+
+`MigrationPlan::migration_file_name(sequence, name)` produz nomes
+compatíveis com o Wrangler, como `0007_add_task_done.sql`.
+
+### Snapshots de schema (`nebula-schema`)
+
+`SchemaSnapshot` é um espelho **próprio (owned) e serializável em JSON** de
+`SchemaManifest` — necessário porque `TableDef`/`ColumnDef` guardam
+`&'static str`/slices, que não dá para desserializar de um arquivo
+persistido. Ferramentas chamam `SchemaSnapshot::from_manifest()` para
+persistir o schema "atual" depois de uma migration bem-sucedida, e
+`snapshot.to_manifest()` para reconstruir um `SchemaManifest` e comparar
+contra as entidades declaradas no código hoje. É exatamente isso que os
+comandos `comet migrate` do [comet-cli](/docs/comet-cli) usam.
+
+## Executando contra D1 (`nebula-d1`)
+
+A feature `nebula-d1` adiciona métodos de execução direto em `Statement`:
+
+- `prepare_d1(&db)` — vincula os `Value`s a um `worker::D1PreparedStatement`.
+- `execute_d1(&db)` — `.run()`, para escritas.
+- `fetch_all_d1(&db)` — `.all()`, retorna o `D1Result` cru.
+- `fetch_optional_d1::<T>(&db)` / `fetch_one_d1::<T>(&db)` — desserializam em
+  `T: Deserialize`; `fetch_one_d1` retorna erro se nenhuma linha for
+  encontrada.
+- `batch_d1(db, statements)` — prepara múltiplos `Statement`s e chama
+  `db.batch(...)`, que o D1 executa **transacionalmente** (tudo ou nada) —
+  uma chamada separada e explícita, para que a execução comum de statement
+  único nunca implique semântica de transação.
+
+```rust
+let row = TaskRow::select()
+    .where_(TaskRow::ID.eq(id))
+    .to_statement()
+    .fetch_optional_d1::<TaskRow>(&db)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+```
+
+## Lints
+
+Lints do Nebula são **apenas consultivos** — não alteram o SQL gerado nem
+rodam automaticamente; quem chama invoca `.lint()` explicitamente.
+
+**`QueryLint`** (de queries):
+
+- `MissingLimit` — um `Select` sem `.limit()` (suprimido por
+  `.allow_unbounded_select()`).
+- `UnindexedFilter { column }` / `UnindexedOrdering { column }` — colunas de
+  filtro/ordenação que não são chave primária, únicas, indexadas, ou a
+  coluna mais à esquerda de um índice composto (suprimido por
+  `.allow_full_table_scan()`).
+- `BroadUpdate` / `BroadDelete` — `Update`/`Delete` sem `WHERE` (suprimido
+  por `.allow_broad_write()`).
+
+**`SchemaLint::UnindexedForeignKey { table, column }`** (de schema) — sinaliza
+colunas de foreign key sem índice, já que buscas de relacionamento no D1 não
+deveriam depender de table scan.
+
+Esses lints mapeiam diretamente para o modelo de custo do D1 (linhas
+lidas/escritas): o objetivo é tornar visíveis os formatos de query caros, não
+otimizar ou bloquear silenciosamente.
+
+## Resumo das features
+
+| Feature | Habilita |
+|---|---|
+| `nebula` | Núcleo do ORM: `Entity`, metadata, `Column<T>`, `Value`, `Select`/`Insert`/`Update`/`Delete`, relacionamentos, lints, geração de SQL de migration. Sem dependência de `worker`/D1. |
+| `nebula-d1` | Helpers de execução em `src/nebula/d1.rs` contra `worker::D1Database`. Habilita `nebula`, `cloudflare-d1`, `serde`. |
+| `nebula-schema` | `SchemaSnapshot` para persistir/comparar estado de schema, usado pelo `comet migrate` do comet-cli. Habilita `nebula`, `serde` (sem `cloudflare`/`worker`). |
