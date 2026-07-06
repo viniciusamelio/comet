@@ -7,10 +7,9 @@ repo, outside the Cargo workspace (same precedent as `comet-macros`), and
 releases in lockstep with the `comet` crate — a given `comet-cli` version
 always pairs with the `comet` core version it was built and tested against.
 
-See `docs/comet-cli-tracker.md` for implementation status, task-by-task
-notes, and the design decisions behind each command (entity discovery via
-`syn`, the schema-snapshot format, the route-wiring strategy). This document
-is the stable command reference; the tracker is the working log.
+This document is the command reference. See the source under `comet-cli/src/`
+for the design decisions behind each command (entity discovery via `syn`,
+the schema-snapshot format, the route-wiring strategy).
 
 ## Command reference
 
@@ -163,8 +162,6 @@ comet test all [--path <dir>]
   dev` itself — the CLI doesn't reimplement that).
 - `perf`: the project's own `npm run test:perf`.
 - `all`: `unit` → `integration` → `perf`, stopping at the first failure.
-  Mirrors the order of the documented "Nebula MVP release gate" in
-  `docs/nebula-implementation-tracker.md`.
 
 All four stream the underlying command's stdout/stderr live rather than
 buffering it, and fail with the exact command line and exit status on a

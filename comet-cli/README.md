@@ -5,7 +5,6 @@ CRUD routes, drive Nebula migration generation, and run a project's
 test/release gate — all from one binary (`comet`).
 
 Full command reference: [`docs/comet-cli-roadmap.md`](../docs/comet-cli-roadmap.md).
-Implementation status and design notes: [`docs/comet-cli-tracker.md`](../docs/comet-cli-tracker.md).
 
 ## Install
 
@@ -65,10 +64,9 @@ none of it is meant to be the only way to write the code it produces:
   concatenating request input. See `docs/nebula-roadmap.md`.
 - **Manual route/module wiring.** `comet generate route` never edits
   `src/app.rs`, and `comet generate entity` never edits `src/lib.rs` — both
-  print the one or two lines you add by hand. This is deliberate (see
-  `comet-cli-tracker.md`, task E1): rewriting a file you're also hand-editing
-  is exactly the kind of codegen that breaks the first time someone doesn't
-  follow the generator's assumptions.
+  print the one or two lines you add by hand. This is deliberate: rewriting
+  a file you're also hand-editing is exactly the kind of codegen that breaks
+  the first time someone doesn't follow the generator's assumptions.
 - **Hand-written migrations.** `comet migrate generate` refuses to guess
   through destructive or ambiguous schema changes (dropped/changed columns,
   changed indexes or foreign keys, a new non-nullable column with no

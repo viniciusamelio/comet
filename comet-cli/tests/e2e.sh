@@ -3,9 +3,7 @@
 # points its `comet`/`rocket` dependencies at this repo checkout (git deps
 # would need a public remote and wouldn't reflect uncommitted core changes),
 # then drives it through the full migrate/generate/test command surface and
-# checks the result actually compiles and is `cargo fmt`-clean. This is the
-# manual verification cycle from `docs/comet-cli-tracker.md` (see the
-# Comet CLI Release Gate section), scripted so CI can run it.
+# checks the result actually compiles and is `cargo fmt`-clean.
 #
 # Requires: rustup with the wasm32-unknown-unknown target, python3 (used for
 # small structured edits to generated Rust files, same as `sed` elsewhere in
