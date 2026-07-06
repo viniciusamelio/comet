@@ -1,4 +1,3 @@
-use comet::nebula::{BelongsTo, HasMany, belongs_to, has_many};
 use rocket::serde::{Deserialize, Serialize};
 
 /// A task as returned to API clients.
@@ -38,70 +37,6 @@ impl From<TaskRow> for Task {
             created_at: row.created_at,
         }
     }
-}
-
-#[derive(Debug, Clone, Deserialize, comet::nebula::Entity)]
-#[nebula(table = "orgs")]
-#[serde(crate = "rocket::serde")]
-pub struct OrgRow {
-    #[nebula(primary_key, auto, unique, index)]
-    pub id: i32,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Deserialize, comet::nebula::Entity)]
-#[nebula(table = "users")]
-#[serde(crate = "rocket::serde")]
-pub struct UserRow {
-    #[nebula(primary_key, auto, unique, index)]
-    pub id: i32,
-    #[nebula(foreign_key = "orgs.id", index)]
-    pub org_id: i32,
-    pub email: String,
-}
-
-impl UserRow {
-    pub const ORG: BelongsTo<UserRow, OrgRow, i32> = belongs_to(Self::ORG_ID, OrgRow::ID);
-}
-
-#[derive(Debug, Clone, Deserialize, comet::nebula::Entity)]
-#[nebula(table = "boards")]
-#[serde(crate = "rocket::serde")]
-pub struct BoardRow {
-    #[nebula(primary_key, auto, unique, index)]
-    pub id: i32,
-    #[nebula(foreign_key = "orgs.id", index)]
-    pub org_id: i32,
-    pub title: String,
-}
-
-impl BoardRow {
-    pub const ORG: BelongsTo<BoardRow, OrgRow, i32> = belongs_to(Self::ORG_ID, OrgRow::ID);
-    pub const TASKS: HasMany<BoardRow, BoardTaskRow, i32> =
-        has_many(Self::ID, BoardTaskRow::BOARD_ID);
-}
-
-#[derive(Debug, Clone, Deserialize, comet::nebula::Entity)]
-#[nebula(table = "board_tasks")]
-#[serde(crate = "rocket::serde")]
-pub struct BoardTaskRow {
-    #[nebula(primary_key, auto, unique, index)]
-    pub id: i32,
-    #[nebula(foreign_key = "boards.id", index)]
-    pub board_id: i32,
-    #[nebula(foreign_key = "tasks.id", index)]
-    pub task_id: i32,
-    #[nebula(foreign_key = "users.id", index)]
-    pub assignee_user_id: i32,
-}
-
-impl BoardTaskRow {
-    pub const BOARD: BelongsTo<BoardTaskRow, BoardRow, i32> =
-        belongs_to(Self::BOARD_ID, BoardRow::ID);
-    pub const TASK: BelongsTo<BoardTaskRow, TaskRow, i32> =
-        belongs_to(Self::TASK_ID, TaskRow::ID);
-    pub const ASSIGNEE: BelongsTo<BoardTaskRow, UserRow, i32> =
-        belongs_to(Self::ASSIGNEE_USER_ID, UserRow::ID);
 }
 
 /// Body accepted by `POST /tasks`.
@@ -152,7 +87,6 @@ pub struct TaskEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use comet::nebula::{Entity as _, SchemaLint, SchemaManifest, Value};
     use rocket::serde::json;
 
     #[test]
@@ -237,49 +171,5 @@ mod tests {
         assert_eq!(decoded.task_id, 42);
         assert_eq!(decoded.kind, TaskEventKind::Completed);
         assert!(encoded.contains(r#""kind":"completed""#), "got: {encoded}");
-    }
-
-    #[test]
-    fn relationship_metadata_is_indexed_and_deterministic() {
-        let manifest = SchemaManifest::new([
-            OrgRow::TABLE,
-            UserRow::TABLE,
-            BoardRow::TABLE,
-            TaskRow::TABLE,
-            BoardTaskRow::TABLE,
-        ]);
-
-        assert_eq!(manifest.lint(), Vec::<SchemaLint>::new());
-        assert_eq!(UserRow::TABLE.foreign_keys[0].references_table, "orgs");
-        assert_eq!(BoardRow::TABLE.foreign_keys[0].references_table, "orgs");
-        assert_eq!(BoardTaskRow::TABLE.foreign_keys.len(), 3);
-    }
-
-    #[test]
-    fn relationship_helpers_build_explicit_selects() {
-        let org_statement = BoardRow::ORG.select_parent(3).to_statement();
-        assert_eq!(
-            org_statement.sql,
-            "SELECT \"id\", \"name\" FROM \"orgs\" WHERE \"orgs\".\"id\" = ? LIMIT ?"
-        );
-        assert_eq!(
-            org_statement.binds,
-            vec![Value::Integer(3), Value::Integer(1)]
-        );
-
-        let board_tasks_statement = BoardRow::TASKS
-            .select_children(9)
-            .order_by(BoardTaskRow::ID.asc())
-            .limit(25)
-            .to_statement();
-        assert_eq!(
-            board_tasks_statement.sql,
-            "SELECT \"id\", \"board_id\", \"task_id\", \"assignee_user_id\" FROM \"board_tasks\" \
-             WHERE \"board_tasks\".\"board_id\" = ? ORDER BY \"board_tasks\".\"id\" ASC LIMIT ?"
-        );
-        assert_eq!(
-            board_tasks_statement.binds,
-            vec![Value::Integer(9), Value::Integer(25)]
-        );
     }
 }

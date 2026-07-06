@@ -1,0 +1,43 @@
+use rocket::http::Status;
+use rocket::response::Responder;
+use rocket::serde::json::Json;
+use rocket::serde::Serialize;
+use rocket::Request;
+
+#[derive(Debug)]
+pub enum ApiError {
+    NotFound,
+    BadRequest(String),
+    Worker(worker::Error),
+}
+
+impl From<worker::Error> for ApiError {
+    fn from(error: worker::Error) -> Self {
+        ApiError::Worker(error)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(crate = "rocket::serde")]
+struct ErrorBody {
+    error: String,
+}
+
+impl<'r> Responder<'r, 'static> for ApiError {
+    fn respond_to(self, request: &'r Request<'_>) -> rocket::response::Result<'static> {
+        let (status, message) = match self {
+            ApiError::NotFound => (Status::NotFound, "not found".to_string()),
+            ApiError::BadRequest(message) => (Status::BadRequest, message),
+            ApiError::Worker(error) => (Status::InternalServerError, error.to_string()),
+        };
+
+        Json(ErrorBody { error: message })
+            .respond_to(request)
+            .map(|mut response| {
+                response.set_status(status);
+                response
+            })
+    }
+}
+
+pub type ApiResult<T> = Result<T, ApiError>;

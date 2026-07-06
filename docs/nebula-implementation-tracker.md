@@ -25,7 +25,7 @@ Last updated: 2026-07-03
 | Migration generation | done | Core manifest, initial SQL generation, safe additive diff, blockers, SQL file writer, tests, and Wrangler layout docs exist. |
 | Query optimization hints | done | Builder-level `lint()` flags missing limits, unindexed filters/orderings, and broad writes with explicit escape hatches. |
 | Relationship metadata | done | Foreign-key metadata, derive attributes, migration SQL, schema lints, relationship query helpers, macro diagnostics, and example model coverage exist. |
-| Comet example integration | done | Task routes use Nebula for D1 reads/writes while preserving queue behavior and integration coverage. |
+| Comet example integration | done | Task routes use Nebula for D1 reads/writes while preserving queue behavior and integration coverage. Reorganized 2026-07-03 into per-context modules (`tasks/`, `orgs/`, `users/`, `boards/`, `assets/`, `demo/`, top-level `app.rs`) instead of single `model.rs`/`routes.rs`/`error.rs` files; see G5 below and `comet-cli-tracker.md` B1 for the CLI template mirroring this layout. |
 | Performance validation | done | SQL-generation bench exists; `wrangler dev` perf smoke covers `/tasks` through Nebula+D1; feature-gated build was audited. |
 
 ## Task List
@@ -89,7 +89,7 @@ Goal: generate and validate D1/SQLite migrations outside request runtime.
 | E1 | Define schema manifest format | done | Codex 2026-07-03 | docs, CLI/core | Entity metadata can be serialized to a deterministic manifest. |
 | E2 | Generate initial `CREATE TABLE` SQL | done | Codex 2026-07-03 | CLI/core | CLI can generate an initial migration from entity metadata. |
 | E3 | Implement safe schema diff MVP | done | Codex 2026-07-03 | CLI/core | Add-table, add-nullable/defaulted-column, and add-index diffs are generated; destructive changes are blocked. |
-| E4 | Integrate with Wrangler migrations layout | done | Codex 2026-07-03 | example, docs | Writer uses the `migrations/0001_*.sql` layout compatible with `wrangler d1 migrations apply`; a standalone CLI wrapper remains future work. |
+| E4 | Integrate with Wrangler migrations layout | done | Codex 2026-07-03 | example, docs | Writer uses the `migrations/0001_*.sql` layout compatible with `wrangler d1 migrations apply`. The standalone CLI wrapper mentioned here shipped 2026-07-03 as `comet-cli` (`comet migrate init`/`generate`/`status`) — see `docs/comet-cli-tracker.md`. |
 | E5 | Add migration tests | done | Codex 2026-07-03 | tests | Snapshot tests cover deterministic migration SQL. |
 | E6 | Add migration SQL file naming | done | Codex 2026-07-03 | core/tests | Migration files use deterministic `0001_slug.sql` names and reject path-like/empty names. |
 | E7 | Add migration SQL file contents writer | done | Codex 2026-07-03 | core/tests | Safe plans render semicolon-terminated SQL suitable for Wrangler D1 migrations. |
@@ -117,6 +117,7 @@ Goal: prove Nebula improves the Comet example without hiding D1 behavior.
 | G2 | Replace list/get task SQL | done | Codex 2026-07-02 | `examples/cloudflare-worker/src/routes.rs` | Read routes use Nebula and integration tests still pass. |
 | G3 | Replace create/complete task SQL | done | Codex 2026-07-02 | example routes | Write routes use Nebula and queue behavior remains unchanged. |
 | G4 | Keep raw SQL escape hatch documented | done | Codex 2026-07-02 | example README, docs | Example shows how to drop to hand-written SQL for complex cases. |
+| G5 | Split example into per-context modules | done | Claude 2026-07-03 | `examples/cloudflare-worker/src/{app.rs,tasks/,orgs/,users/,boards/,assets/,demo/}` | Single `model.rs`/`routes.rs`/`error.rs` files (mixing 5 entities and unrelated route groups) replaced with per-domain modules: `tasks/{model,routes,error}.rs` (the only context with live routes + its own `ApiError`), `orgs/model.rs`, `users/model.rs`, `boards/{model,board_task}.rs` (relationship-heavy join entity kept beside the board it's about, cross-context tests live in `boards/board_task.rs`), `assets/routes.rs` (R2), `demo/routes.rs` (index/echo/stream/websocket), and a top-level `app.rs` that only mounts routes. `cargo test --lib` (9 passed) and `RUSTC="$(rustup which rustc)" cargo check --target wasm32-unknown-unknown` both clean (only pre-existing vendored-Rocket warnings); `cargo fmt --check` clean. |
 
 ### H. Performance And Release Gates
 

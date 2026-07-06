@@ -2,8 +2,8 @@
 use wasm_bindgen::JsValue;
 use worker::{event, Context, Env, MessageBatch, Request, Response, Result};
 
-use crate::model::TaskEvent;
-use crate::routes::rocket;
+use crate::app::rocket;
+use crate::tasks::model::TaskEvent;
 
 const RECORD_TASK_EVENT_QUERY: &str = "INSERT INTO task_events (task_id, kind) VALUES (?1, ?2)";
 
@@ -24,7 +24,10 @@ pub async fn queue(batch: MessageBatch<TaskEvent>, env: Env, _ctx: Context) -> R
     for message in batch.messages()? {
         let event = message.into_body();
         db.prepare(RECORD_TASK_EVENT_QUERY)
-            .bind(&[JsValue::from(event.task_id), JsValue::from(event.kind.as_str())])?
+            .bind(&[
+                JsValue::from(event.task_id),
+                JsValue::from(event.kind.as_str()),
+            ])?
             .run()
             .await?;
     }

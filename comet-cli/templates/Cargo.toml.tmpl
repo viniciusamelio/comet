@@ -1,0 +1,19 @@
+[package]
+name = "{{project_name}}"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# `comet` is not on crates.io yet (see viniciusamelio/comet's README), so it
+# is pulled from git. `rocket` must be declared explicitly and point at the
+# same git source/revision as `comet`, because comet vendors a patched Rocket
+# fork (wasm32 + Worker support) and the app needs that exact package
+# instance for its route macros and types to line up.
+comet = { git = "https://github.com/viniciusamelio/comet", default-features = false, features = ["cloudflare", "cloudflare-d1", "nebula", "nebula-d1"] }
+rocket = { git = "https://github.com/viniciusamelio/comet", default-features = false, features = ["json", "worker"] }
+console_error_panic_hook = "0.1.7"
+wasm-bindgen = "0.2"
+worker = { version = "0.8.5", features = ["d1"] }
