@@ -1,0 +1,11 @@
+{
+  "title": "Comet",
+  "pages": [
+    "index",
+    "getting-started",
+    "cloudflare-adapter",
+    "nebula-orm",
+    "comet-cli",
+    "example-walkthrough"
+  ]
+}

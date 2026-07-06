@@ -1,9 +1,49 @@
+// `PhantomData`/`Deref`/`Status`/`FromRequest`/`Outcome`/`Env` are only used
+// by the individually-gated binding guards below (`D1`, `QueueBinding`,
+// `Kv`, `ServiceBinding`, `Hyperdrive`) — none of them are needed by
+// `BindingName`/`BindingError`, which are always compiled.
+#[cfg(any(
+    feature = "cloudflare-d1",
+    feature = "cloudflare-queue",
+    feature = "cloudflare-kv",
+    feature = "cloudflare-service",
+    feature = "cloudflare-hyperdrive",
+))]
 use std::marker::PhantomData;
+#[cfg(any(
+    feature = "cloudflare-d1",
+    feature = "cloudflare-queue",
+    feature = "cloudflare-kv",
+    feature = "cloudflare-service",
+    feature = "cloudflare-hyperdrive",
+))]
 use std::ops::Deref;
 
+#[cfg(any(
+    feature = "cloudflare-d1",
+    feature = "cloudflare-queue",
+    feature = "cloudflare-kv",
+    feature = "cloudflare-service",
+    feature = "cloudflare-hyperdrive",
+))]
 use rocket::http::Status;
+#[cfg(any(
+    feature = "cloudflare-d1",
+    feature = "cloudflare-queue",
+    feature = "cloudflare-kv",
+    feature = "cloudflare-service",
+    feature = "cloudflare-hyperdrive",
+))]
 use rocket::request::{FromRequest, Outcome};
-use worker::{Env, Error};
+#[cfg(any(
+    feature = "cloudflare-d1",
+    feature = "cloudflare-queue",
+    feature = "cloudflare-kv",
+    feature = "cloudflare-service",
+    feature = "cloudflare-hyperdrive",
+))]
+use worker::Env;
+use worker::Error;
 
 /// Names a Cloudflare binding for typed request guards.
 ///

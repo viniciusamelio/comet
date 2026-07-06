@@ -3,8 +3,10 @@ use std::pin::Pin;
 
 use bytes::Bytes;
 use futures_util::StreamExt;
+#[cfg(feature = "cloudflare-websocket")]
+use rocket::http::Status;
 use rocket::http::uri::Origin;
-use rocket::http::{Header, Method, Status};
+use rocket::http::{Header, Method};
 use rocket::tokio::io::AsyncReadExt;
 use rocket::{Build, Orbit, Rocket};
 use std::cell::RefCell;
@@ -13,6 +15,7 @@ use worker::{Context, Env, Error, Headers, Request, Response, Result};
 
 use crate::{AdapterError, BoxedByteStream, WorkerBody, WorkerRequest, WorkerResponse};
 
+#[cfg(feature = "cloudflare-websocket")]
 use websocket::{PENDING_WEBSOCKET, WebSocketHandler, websocket_response_boxed};
 
 /// Bodies at or under this size skip the chunked-read loop entirely: one
@@ -498,7 +501,9 @@ fn to_io_error(error: impl std::fmt::Display) -> std::io::Error {
 }
 
 mod bindings;
+#[cfg(feature = "cloudflare-r2")]
 mod r2;
+#[cfg(feature = "cloudflare-websocket")]
 mod websocket;
 
 #[cfg(feature = "cloudflare-d1")]
