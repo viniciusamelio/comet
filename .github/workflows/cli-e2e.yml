@@ -1,0 +1,32 @@
+name: comet-cli E2E
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  comet-cli-e2e:
+    name: comet-cli end-to-end scaffold
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            comet-cli
+
+      - name: scaffold, migrate, and wasm32-compile a fixture project
+        run: bash comet-cli/tests/e2e.sh
