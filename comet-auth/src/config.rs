@@ -22,6 +22,7 @@ pub struct AuthConfig {
     pub base_url: Option<String>,
     pub session_cookie: String,
     pub session_ttl_seconds: u64,
+    pub authorization_claims_cache_ttl_seconds: u64,
     pub same_site: CookieSameSite,
     pub secure_cookies: bool,
     pub token_pepper_env: Option<String>,
@@ -34,6 +35,7 @@ impl Default for AuthConfig {
             base_url: None,
             session_cookie: DEFAULT_SESSION_COOKIE.to_owned(),
             session_ttl_seconds: DEFAULT_SESSION_TTL_SECONDS,
+            authorization_claims_cache_ttl_seconds: 60,
             same_site: CookieSameSite::Lax,
             secure_cookies: true,
             token_pepper_env: Some("COMET_AUTH_TOKEN_PEPPER".to_owned()),
@@ -63,6 +65,11 @@ impl AuthConfig {
 
     pub fn session_ttl_seconds(mut self, ttl: u64) -> Self {
         self.session_ttl_seconds = ttl;
+        self
+    }
+
+    pub fn authorization_claims_cache_ttl_seconds(mut self, ttl: u64) -> Self {
+        self.authorization_claims_cache_ttl_seconds = ttl;
         self
     }
 

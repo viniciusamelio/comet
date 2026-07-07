@@ -113,9 +113,29 @@ async fn create_board() -> &'static str {
 }
 ```
 
+Políticas top-level são `all` por padrão. Use `any(...)` quando uma claim
+compatível for suficiente, e `resource = "..."` para checks estáticos por
+recurso:
+
+```rust
+#[comet_auth::requires_auth(any(role = "admin", permission = "tasks:review"), resource = "demo")]
+#[rocket::get("/private/reviewer")]
+async fn reviewer() -> &'static str {
+    "reviewer"
+}
+```
+
 `scope = "..."` funciona como alias de permissão. Sessão ausente retorna
 `401 Unauthorized`; sessão autenticada sem papel, permissão ou scope retorna
 `403 Forbidden`.
+
+Claims de autorização são carregadas do D1 e cacheadas no KV por 60 segundos
+por padrão. Ajuste ou desative com:
+
+```rust
+comet_auth::AuthConfig::from_env()
+    .authorization_claims_cache_ttl_seconds(0);
+```
 
 Para criar as tabelas RBAC junto da auth:
 

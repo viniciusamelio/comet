@@ -2,7 +2,9 @@ use rocket::{Build, Rocket};
 use worker::{Context, Env};
 
 use crate::assets::routes::{get_asset, put_asset};
-use crate::demo::routes::{echo, index, private_admin, private_me, stream_demo, websocket_echo};
+use crate::demo::routes::{
+    echo, index, private_admin, private_me, private_reviewer, stream_demo, websocket_echo,
+};
 use crate::tasks::routes::{complete_task, create_task, get_task, list_tasks, DB};
 
 struct AuthKv;
@@ -71,7 +73,8 @@ pub fn rocket(env: Env, _ctx: Context) -> Rocket<Build> {
                 create_task,
                 complete_task,
                 private_admin,
-                private_me
+                private_me,
+                private_reviewer
             ],
         )
 }

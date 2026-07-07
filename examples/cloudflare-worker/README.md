@@ -57,6 +57,8 @@ comet::cloudflare::fetch(req, env, ctx, rocket).await
 - `GET /private/me` — protected route using `#[comet_auth::requires_auth]`.
 - `GET /private/admin` — RBAC-protected route using
   `#[comet_auth::requires_auth(role = "admin")]`.
+- `GET /private/reviewer` — RBAC-protected route using `any(...)` and
+  `resource = "demo"`.
 - `GET /tasks` — list all tasks.
 - `POST /tasks` — create a task from a JSON body (`{"title": "..."}`) and
   publish a `created` event to the queue.

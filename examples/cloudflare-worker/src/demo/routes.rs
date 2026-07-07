@@ -34,6 +34,12 @@ pub async fn private_admin() -> &'static str {
     "admin\n"
 }
 
+#[comet_auth::requires_auth(any(role = "admin", permission = "tasks:review"), resource = "demo")]
+#[get("/private/reviewer")]
+pub async fn private_reviewer() -> &'static str {
+    "reviewer\n"
+}
+
 #[post("/echo", data = "<body>")]
 pub fn echo(body: String) -> String {
     body
