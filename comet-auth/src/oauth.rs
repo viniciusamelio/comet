@@ -109,6 +109,7 @@ pub fn start_oauth(
     provider: OAuthProviderId,
     redirect_after: Option<String>,
 ) -> Result<OAuthStart, AuthError> {
+    let redirect_after = validate_redirect_after(redirect_after)?;
     let state = session::generate_token()?;
     let state_hash = session::hash_token(&state, None);
     let code_verifier = session::generate_token()?;
@@ -143,6 +144,23 @@ pub fn redirect_uri(config: &AuthConfig, provider: OAuthProviderId) -> Result<St
         base_url.trim_end_matches('/'),
         provider.as_str()
     ))
+}
+
+pub fn validate_redirect_after(value: Option<String>) -> Result<Option<String>, AuthError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let is_relative_path = value.starts_with('/') && !value.starts_with("//");
+    let has_unsafe_chars = value
+        .chars()
+        .any(|character| character.is_control() || character == '\\');
+
+    if is_relative_path && !has_unsafe_chars {
+        Ok(Some(value))
+    } else {
+        Err(AuthError::InvalidRedirect)
+    }
 }
 
 pub fn provider_secrets(
@@ -311,11 +329,11 @@ fn authorize_url(
         .append_pair("state", state);
 
     if !matches!(provider, OAuthProviderId::GitHub) {
-        query
-            .append_pair("nonce", nonce)
-            .append_pair("code_challenge", code_challenge)
-            .append_pair("code_challenge_method", "S256");
+        query.append_pair("nonce", nonce);
     }
+    query
+        .append_pair("code_challenge", code_challenge)
+        .append_pair("code_challenge_method", "S256");
 
     format!("{base}?{}", query.finish())
 }
@@ -350,9 +368,7 @@ pub async fn exchange_code(
         ("grant_type", "authorization_code"),
         ("redirect_uri", redirect_uri.as_str()),
     ];
-    if !matches!(provider, OAuthProviderId::GitHub) {
-        pairs.push(("code_verifier", code_verifier));
-    }
+    pairs.push(("code_verifier", code_verifier));
     if let Some(secret) = secrets.client_secret.as_deref() {
         pairs.push(("client_secret", secret));
     }
@@ -634,7 +650,7 @@ struct GitHubEmail {
 
 #[cfg(test)]
 mod tests {
-    use super::{OAuthProviderId, StaticEnv, form_body, start_oauth};
+    use super::{OAuthProviderId, StaticEnv, form_body, start_oauth, validate_redirect_after};
     use crate::AuthConfig;
     use crate::providers;
 
@@ -666,11 +682,39 @@ mod tests {
     }
 
     #[test]
+    fn start_github_oauth_uses_pkce() {
+        let config = AuthConfig::default()
+            .base_url("https://api.example.com")
+            .provider(
+                providers::GitHub::from_env()
+                    .client_id_env("GITHUB_ID")
+                    .client_secret_env("GITHUB_SECRET"),
+            );
+        let env = StaticEnv(&[("GITHUB_ID", "gid"), ("GITHUB_SECRET", "secret")]);
+
+        let start = start_oauth(&config, &env, OAuthProviderId::GitHub, None).unwrap();
+
+        assert!(start.authorize_url.contains("code_challenge="));
+        assert!(start.authorize_url.contains("code_challenge_method=S256"));
+    }
+
+    #[test]
     fn form_body_url_encodes_values() {
         assert_eq!(
             form_body(&[("scope", "openid email")]),
             "scope=openid+email"
         );
+    }
+
+    #[test]
+    fn validates_redirect_after_as_relative_path() {
+        assert_eq!(
+            validate_redirect_after(Some("/dashboard".to_owned())).unwrap(),
+            Some("/dashboard".to_owned())
+        );
+        assert!(validate_redirect_after(Some("https://evil.test".to_owned())).is_err());
+        assert!(validate_redirect_after(Some("//evil.test".to_owned())).is_err());
+        assert!(validate_redirect_after(Some("/\\evil".to_owned())).is_err());
     }
 
     #[test]
