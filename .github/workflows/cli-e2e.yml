@@ -2,6 +2,7 @@ name: comet-cli E2E
 
 on:
   push:
+    branches: [master]
   pull_request:
 
 concurrency:

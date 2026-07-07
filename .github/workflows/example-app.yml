@@ -2,6 +2,7 @@ name: Example App
 
 on:
   push:
+    branches: [master]
   pull_request:
 
 concurrency:
