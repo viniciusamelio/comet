@@ -1,0 +1,123 @@
+---
+title: Overview
+description: What Comet is, how the pieces fit together, and why it exists.
+---
+
+## What is Comet
+
+**Comet** runs [Rocket](https://rocket.rs) routes on **Cloudflare Workers**.
+
+The problem is easy to state: Rocket's published releases depend on
+Hyper/Tokio for their networking layer, and that layer doesn't compile for
+the `wasm32-unknown-unknown` target Workers use. Workers run inside a
+single-threaded V8 isolate, with a `fetch(request) -> response` model, no
+sockets, no OS threads, and bindings (D1, KV, Queues...) that only resolve
+through `!Send` futures.
+
+Comet solves this with two pieces:
+
+1. **A vendored, patched Rocket fork** (in `vendor/rocket`), which splits the
+   routing/guards/responders core (which compiles to
+   `wasm32-unknown-unknown`) from the server layer (Hyper, TLS, Tokio) — and
+   exposes external dispatch hooks to run without ever opening a socket.
+2. **The `comet::cloudflare` adapter**, which converts a `worker::Request`
+   into Rocket request metadata, dispatches it directly through the patched
+   Rocket (no socket, no Hyper), and converts the resulting
+   `rocket::Response` back into a `worker::Response`.
+
+In practice, this means: you write ordinary Rocket route handlers — guards,
+responders, fairings — in the same style as always, and they run, unmodified,
+on top of Cloudflare Workers.
+
+```rust
+use worker::{event, Context, Env, Request, Response, Result};
+
+#[macro_use]
+extern crate rocket;
+
+#[get("/")]
+fn index() -> &'static str {
+    "hello from Rocket on Cloudflare Workers"
+}
+
+fn rocket(env: Env, _ctx: Context) -> rocket::Rocket<rocket::Build> {
+    rocket::build().manage(env).mount("/", routes![index])
+}
+
+#[event(fetch)]
+pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
+    comet::cloudflare::fetch(req, env, ctx, rocket).await
+}
+```
+
+## The three pieces of the project
+
+<Cards>
+  <Card title="Cloudflare adapter" href="/en/docs/cloudflare-adapter">
+    `comet::cloudflare` — request dispatch, request/response body streaming,
+    typed guards for D1/Queue/KV/R2/Service/Hyperdrive, an R2 object
+    responder, and WebSocket support.
+  </Card>
+  <Card title="Nebula ORM" href="/en/docs/nebula-orm">
+    An optional, D1-first ORM core: `#[derive(Entity)]`, typed columns,
+    deterministic SQL builders, explicit relationships, and safe migration
+    generation.
+  </Card>
+  <Card title="comet-cli" href="/en/docs/comet-cli">
+    A binary (`comet`) that scaffolds new projects, generates entities and
+    CRUD routes, drives migration generation, and runs your project's test
+    gate.
+  </Card>
+</Cards>
+
+## Current status
+
+Comet is described by its own maintainers as **an early-stage adapter, not a
+finished framework integration**. What already works today, with integration
+tests proving the behavior:
+
+- **Real streaming**: request and response bodies flow through Rocket
+  without being fully buffered before the other side can start working with
+  them.
+- **JSON guards and responders**, the normal Rocket kind.
+- **Cloudflare bindings** via Rocket managed state —
+  `comet::cloudflare::D1`, `QueueBinding`, `Kv`, `R2Bucket`, `ServiceBinding`,
+  and `Hyperdrive` — as typed request guards for named bindings.
+- **R2 object responses** via `R2Object`, which streams an R2 object's body
+  while preserving R2's own HTTP metadata.
+- **WebSocket routes** via `WebSocketUpgrade`/`WebSocketResponse`, behind the
+  `cloudflare-websocket` feature, using normal Rocket route syntax.
+
+What's not there yet: full, durable-storage-backed replacements for
+filesystem APIs such as `FileServer`, `NamedFile`, and disk-backed
+`TempFile` — Workers expose no durable local filesystem, so this area is
+deliberately left out rather than half-implemented.
+
+## Quick vocabulary
+
+| Term | What it is |
+|---|---|
+| **Comet** | The `comet` crate: the Rocket ↔ Cloudflare Workers adapter. |
+| **Nebula** | The `comet::nebula` module, the optional ORM core (feature `nebula`). |
+| **comet-cli** | The `comet` binary, packaged in the `comet-cli/` directory, for scaffolding and automation. |
+| **Worker** | Cloudflare's runtime (a V8 isolate) where the compiled code runs in production. |
+| **D1** | Cloudflare's SQLite-compatible database, Nebula's primary target. |
+
+## Publishing to crates.io
+
+`comet` isn't published to crates.io yet. The reason is the vendored Rocket
+fork: `cargo package` fails because a path dependency needs a version, and
+adding one would make crates.io silently swap the patched Rocket for the
+unpatched registry version. Until the fork has its own public, versioned
+home, depend on Comet via Git:
+
+```toml
+[dependencies]
+comet = { git = "https://github.com/viniciusamelio/comet", default-features = false, features = ["cloudflare"] }
+```
+
+A `git` dependency clones the whole repository, so the vendored `rocket`
+path dependency resolves the same way it does locally — no extra setup
+needed on the consumer's side.
+
+Ready to start? Head over to [Getting Started](/en/docs/getting-started).

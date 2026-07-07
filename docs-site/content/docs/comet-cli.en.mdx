@@ -1,0 +1,282 @@
+---
+title: comet-cli
+description: Full command reference for the comet binary — new, generate, migrate, and test.
+---
+
+`comet-cli` is a Rust binary (command `comet`) that lives in `comet-cli/`,
+outside the main workspace — just like `comet-macros`. It does four things:
+
+- `comet new` — creates a Comet + Nebula + Cloudflare Worker project.
+- `comet generate entity|route` — adds `#[derive(Entity)]` structs and CRUD
+  route modules to an existing project.
+- `comet migrate init|generate|status` — drives migration generation from
+  the entities' real, compiled metadata.
+- `comet test unit|integration|perf|all` — runs the project's test/release
+  gate.
+
+It evolves alongside the `comet` crate — `comet-cli` even copies the target
+project's exact `comet` dependency spec when compiling a temporary
+schema-introspection crate, to guarantee binary compatibility.
+
+## Installation
+
+Not published to crates.io yet (same situation as the `comet` crate, see
+[Getting Started](/en/docs/getting-started)):
+
+```sh
+# --git clones the whole repository, so `comet = { path = ".." }`
+# inside comet-cli/Cargo.toml resolves normally.
+cargo install --git https://github.com/viniciusamelio/comet comet-cli
+
+# ...or from a local checkout, to test uncommitted changes:
+cd comet-cli && cargo install --path .
+```
+
+Installs a `comet` binary on `PATH` (usually `~/.cargo/bin`). Confirm with
+`comet --help`.
+
+## `comet new`
+
+```
+comet new <name> [--path <dir>] [--db-binding <NAME>]
+```
+
+- `<name>`: project/crate/D1 database name. Must start with a letter; only
+  ASCII letters, digits, `-`/`_`.
+- `--path`: target directory (default `./<name>`); fails if it already
+  exists.
+- `--db-binding`: D1 binding name used in `wrangler.jsonc` and generated
+  route code (default `DB`).
+
+```sh
+comet new my_app
+# Created `my_app` in my_app
+# Next steps:
+#   cd my_app
+#   comet migrate init
+#   npm install
+#   npm run dev
+```
+
+Generated tree:
+
+```
+my_app/
+  Cargo.toml
+  wrangler.jsonc
+  package.json
+  README.md
+  src/
+    lib.rs
+    entry.rs
+    app.rs
+    tasks/
+      mod.rs
+      model.rs
+```
+
+`migrations/` is **not** created by `comet new` — it's created by
+`comet migrate init`, so it doesn't collide with its numbering.
+
+## `comet generate entity`
+
+```
+comet generate entity <Name> [--field <spec>]... [--table <name>] [--path <dir>]
+```
+
+- `<Name>`: a singular concept, e.g. `Board`. The context module becomes
+  `pluralize(snake_case(Name))` (`boards`), and the struct becomes
+  `PascalCase(Name) + "Row"` (`BoardRow`).
+- `--field name:type[:attribute[,attribute]...]` (repeatable).
+  - Types: `string`/`text`, `i32`/`int`/`integer`, `i64`/`bigint`,
+    `f64`/`float`/`real`, `bool`/`boolean` (becomes `i32` in Rust — D1/SQLite
+    has no boolean type — with an explanatory comment on the generated
+    field), `bytes`/`blob` (`Vec<u8>`).
+  - Attributes: bare flags `primary_key`, `auto`/`auto_increment`,
+    `unique`, `index`/`indexed`, `nullable`, or `key=value`:
+    `default=...`, `rename=...`, `foreign_key=table.column`.
+- An `id: i32` primary key (`primary_key, auto, unique, index`) is added
+  automatically, unless an `id` field (or one flagged `primary_key`) was
+  already provided.
+- `--table`: overrides the derived table name.
+
+```sh
+comet generate entity Board --field title:string \
+  --field org_id:i64:foreign_key=orgs.id,index
+# Wrote src/boards/model.rs
+#
+# Next steps:
+#   Add `pub mod boards;` to src/lib.rs
+#   Run `comet generate route Board` to scaffold CRUD routes.
+```
+
+Generated struct:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, comet::nebula::Entity)]
+#[nebula(table = "boards")]
+#[serde(crate = "rocket::serde")]
+pub struct BoardRow {
+    #[nebula(primary_key, auto, unique, index)]
+    pub id: i32,
+    pub title: String,
+    #[nebula(foreign_key = "orgs.id", index)]
+    pub org_id: i64,
+}
+```
+
+The command never edits `src/lib.rs` — it prints the missing line, and
+refuses to run if the struct already exists in `model.rs`.
+
+## `comet generate route`
+
+```
+comet generate route <Entity> [--db-binding <NAME>] [--path <dir>]
+```
+
+Requires the entity to already exist (points to `generate entity`
+otherwise). Reads the fields back from `model.rs` via `syn` — never
+redeclared on the command line — so the entity and its routes can never
+drift apart.
+
+Writes:
+
+- `src/<context>/routes.rs` — `list_<context>`, `get_<concept>`,
+  `create_<concept>`, `update_<concept>`, `delete_<concept>` handlers,
+  using Nebula's fluent query builder.
+- `src/<context>/error.rs` — `ApiError`/`ApiResult`.
+- A `New<Entity>` struct (every field except the primary key/`auto`
+  fields), appended to `model.rs`.
+
+```sh
+comet generate route Board --db-binding DB
+# Wrote src/boards/routes.rs
+# Wrote src/boards/error.rs
+#
+# Next steps — wire these into src/app.rs:
+#   use crate::boards::routes::{list_boards, get_board, create_board, update_board, delete_board};
+#   // add list_boards, get_board, create_board, update_board, delete_board to the routes![...] list
+```
+
+Fails if `routes.rs` already exists. Never touches `src/app.rs` — it prints
+the `use` line and the route names to add to `routes![...]`.
+
+## `comet migrate init`
+
+```
+comet migrate init [--path <dir>]
+```
+
+Fails if `migrations/.comet-schema.json` already exists. Otherwise,
+discovers the entities, extracts their real, compiled schema, writes
+`migrations/0001_init.sql` (all the `CREATE TABLE` statements from
+`SchemaManifest::initial_migration()`), and saves the baseline snapshot at
+`migrations/.comet-schema.json`.
+
+## `comet migrate generate`
+
+```
+comet migrate generate <name> [--path <dir>]
+```
+
+Compares the current entities against the last saved snapshot. If the plan
+isn't safe (`MigrationPlan::is_safe()` is false), it prints each blocker as
+a sentence and exits with an error **without writing anything** — blockers
+include removed/changed columns, changed or removed indexes/foreign keys,
+and unsafe `ADD COLUMN` (non-nullable, no default). If there's nothing to
+do, it prints "Schema is up to date" and exits successfully. Otherwise, it
+writes `migrations/NNNN_<name>.sql` (sequence = highest existing
+`NNNN_*.sql` + 1) and updates the snapshot.
+
+```sh
+comet migrate generate add_notes
+# Wrote migrations/0002_add_notes.sql
+# Updated schema snapshot at migrations/.comet-schema.json
+```
+
+## `comet migrate status`
+
+```
+comet migrate status [--path <dir>]
+```
+
+Read-only report: shows the current schema's table/column counts and, if a
+baseline snapshot exists, either "up to date", the pending SQL statements,
+or the list of blockers. Always exits successfully — it's a report, not a
+gate.
+
+## `comet test`
+
+```
+comet test unit [--path <dir>]
+comet test integration [--path <dir>]
+comet test perf [--path <dir>]
+comet test all [--path <dir>]
+```
+
+- `unit`: runs `cargo fmt --check` and then `cargo test --lib` directly (no
+  Node needed).
+- `integration`: runs the project's own `npm run test:integration` (e.g.
+  `examples/cloudflare-worker/tests/integration.sh`, which drives
+  `wrangler dev`) — the CLI doesn't reimplement that orchestration.
+- `perf`: runs `npm run test:perf`.
+- `all`: `unit` → `integration` → `perf`, stopping at the first failure.
+
+<Callout type="info">
+  A project freshly created by `comet new` has no
+  `test:integration`/`test:perf` scripts in its `package.json` — so
+  `comet test integration`/`perf`/`all` fail immediately with npm's
+  "Missing script" error, until you add those scripts. That's expected
+  behavior, not a bug.
+</Callout>
+
+## Entity discovery
+
+`comet-cli` recursively walks the `.rs` files under `src/`, parses them
+with `syn`, and collects every `struct` whose `#[derive(...)]` list
+contains a path whose last segment is `Entity` — so `Entity`,
+`nebula::Entity`, and `comet::nebula::Entity` all match, regardless of
+import style. Module paths are derived from the file's location:
+`mod.rs`/`lib.rs`/`main.rs` declare items at the current module path; any
+other file name becomes a nested module (`src/tasks/model.rs` →
+`tasks::model`).
+
+For `comet generate route`, a second pass re-reads the target struct's
+fields (name, Rust type, `primary_key`/`auto` flags) to build the
+`New<Entity>` structs and handlers without redeclaring the schema on the
+command line.
+
+## End-to-end migration workflow
+
+1. A **temporary** Cargo crate is generated, whose `Cargo.toml` copies the
+   target project's `comet` dependency (same rev/path/version) plus the
+   `nebula-schema` feature — guaranteeing the temporary crate resolves to
+   the same `comet` package instance, so the `impl Entity`s type-check. Its
+   generated `main.rs` calls `<Entity>::TABLE` for every entity, builds a
+   `SchemaManifest::from_entities([...])`, converts it to a
+   `SchemaSnapshot`, and prints it as JSON via `cargo run --quiet`.
+2. `comet-cli` persists/loads that `SchemaSnapshot` at
+   `migrations/.comet-schema.json`.
+3. `init`/`generate`/`status` diff the persisted snapshot against the
+   current schema, as described above.
+
+## Escape hatches
+
+Every command this CLI produces is meant to be hand-edited afterward —
+nothing is the only way to write the code it generates:
+
+- **Raw SQL.** `comet::cloudflare::D1<B>` derefs to `worker::D1Database`,
+  so any route can drop down to `db.prepare(sql).bind(...)` for a query the
+  Nebula builder doesn't model. Keep it parameterized — never build SQL by
+  concatenating request input.
+- **Manual route/module wiring.** `comet generate route` never edits
+  `src/app.rs`, and `comet generate entity` never edits `src/lib.rs` — both
+  print the one or two lines you add by hand.
+- **Hand-written migrations.** `comet migrate generate` refuses to guess
+  through destructive or ambiguous changes — write the migration SQL by
+  hand in that case, then update the matching table in
+  `migrations/.comet-schema.json` manually.
+- **Non-generated contexts.** Nothing requires every module to be
+  CLI-generated — the [`cloudflare-worker` example](/en/docs/example-walkthrough)
+  hand-writes several entities and demo routes (R2, WebSocket, queue)
+  alongside a `tasks/` context in the `comet new` shape.

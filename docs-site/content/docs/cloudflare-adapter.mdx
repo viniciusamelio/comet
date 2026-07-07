@@ -272,7 +272,7 @@ bindings e WebSocket de verdade).
 | `cloudflare-service` | Guard `ServiceBinding<B>`. |
 | `cloudflare-hyperdrive` | Guard `Hyperdrive<B>`. |
 | `cloudflare-websocket` | `WebSocketUpgrade`, `WebSocketResponse` e helpers de baixo nível. Deixe desligada em Workers só-HTTP. |
-| `nebula` | Núcleo do ORM Nebula (veja [Nebula ORM](/docs/nebula-orm)). |
+| `nebula` | Núcleo do ORM Nebula (veja [Nebula ORM](/pt-BR/docs/nebula-orm)). |
 | `nebula-d1` | Execução de statements Nebula contra D1; habilita `nebula`, `cloudflare-d1`, `serde`. |
 | `nebula-schema` | Espelho serializável do schema do Nebula, usado pelo `comet-cli`; habilita `nebula`, `serde`; não exige `cloudflare`/`worker`. |
 
@@ -288,7 +288,7 @@ exige `dep:worker`).
 - **Parsing de `Range` é manual**: `R2Object::get_range()` exige que quem
   chama construa um `worker::Range`.
 - **`comet` não está publicado no crates.io** — veja a seção correspondente
-  em [Getting Started](/docs/getting-started).
+  em [Getting Started](/pt-BR/docs/getting-started).
 - **`RocketWorker` não testa streaming nem bindings** — sempre bufferiza e
   nunca cria um `worker::Env`/bindings/par de WebSocket reais; isso exige a
   camada `cloudflare::Application` (ainda nativa) ou testes de integração

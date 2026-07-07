@@ -1,0 +1,186 @@
+---
+title: Getting Started
+description: Install comet-cli, scaffold a project, and run it locally with wrangler.
+---
+
+There are two ways to get started: use **comet-cli** to generate a complete
+project (recommended), or add `comet` as a dependency to an existing Rocket
+project. This guide covers both.
+
+## Prerequisites
+
+- Stable Rust, with the `wasm32-unknown-unknown` target:
+
+  ```sh
+  rustup target add wasm32-unknown-unknown
+  ```
+
+- Node.js + npm, to run [Wrangler](https://developers.cloudflare.com/workers/wrangler/)
+  (Cloudflare's CLI for Workers).
+- A Cloudflare account, if you want to apply remote migrations or actually
+  deploy (running locally with `wrangler dev` doesn't require one).
+
+## Recommended path: `comet-cli`
+
+### Install
+
+`comet-cli` isn't published to crates.io yet — install straight from Git:
+
+```sh
+cargo install --git https://github.com/viniciusamelio/comet comet-cli
+```
+
+This installs a `comet` binary on your `PATH` (typically
+`~/.cargo/bin`). Confirm with:
+
+```sh
+comet --help
+```
+
+### Create a project
+
+```sh
+comet new my_app
+cd my_app
+```
+
+`comet new` creates a `my_app/` folder with a Rocket + Nebula Worker already
+configured:
+
+```
+my_app/
+  Cargo.toml         # comet/rocket as git dependencies (patched Rocket fork)
+  wrangler.jsonc      # D1 binding, build command via worker-build
+  package.json        # npm scripts: dev, deploy, check, test
+  README.md
+  src/
+    lib.rs            # pub mod tasks; + mod entry (wasm32 only)
+    entry.rs           # #[event(fetch)] -> comet::cloudflare::fetch(...)
+    app.rs             # rocket::build().manage(env).mount("/", routes![...])
+    tasks/
+      mod.rs
+      model.rs         # example Task/TaskRow entity (#[derive(Entity)])
+```
+
+Notice that **`migrations/` isn't created yet** — that's deliberate, so it
+doesn't collide with the numbering `comet migrate init` uses next.
+
+### Generate the first migration
+
+```sh
+comet migrate init
+```
+
+This discovers the project's entities (via `#[derive(Entity)]`), generates
+`migrations/0001_init.sql` with the corresponding `CREATE TABLE`/
+`CREATE INDEX` statements, and saves a schema snapshot at
+`migrations/.comet-schema.json`.
+
+### Install JS dependencies and run locally
+
+```sh
+npm install
+npm run dev
+```
+
+`npm run dev` runs `wrangler dev`, which compiles the Worker (via
+`worker-build`) and serves it locally. To apply migrations to the local D1
+before running:
+
+```sh
+npx wrangler d1 migrations apply DB --local
+```
+
+(swap `DB` for the binding name, if you used `--db-binding` with `comet new`.)
+
+### Add an entity and CRUD routes
+
+```sh
+comet generate entity Board --field title:string \
+  --field org_id:i64:foreign_key=orgs.id,index
+
+comet generate route Board
+```
+
+Both commands print the lines you still need to add by hand to `src/lib.rs`
+(the `pub mod`) and `src/app.rs` (the `use` and the entry in `routes![...]`)
+— the CLI deliberately never edits those two files for you. See more in
+[comet-cli](/en/docs/comet-cli).
+
+After adding the routes, generate the matching migration:
+
+```sh
+comet migrate generate add_boards
+```
+
+### Run the tests
+
+```sh
+comet test unit
+```
+
+## Manual path: adding `comet` to an existing Rocket project
+
+If you already have a Rocket application and just want to run it on
+Workers, add the dependency (via Git, for the reason explained in the
+[overview](/en/docs)):
+
+```toml
+[dependencies]
+comet = { git = "https://github.com/viniciusamelio/comet", default-features = false, features = ["cloudflare"] }
+```
+
+And switch your Worker's entrypoint to dispatch through Comet:
+
+```rust
+use worker::{event, Context, Env, Request, Response, Result};
+
+#[macro_use]
+extern crate rocket;
+
+#[get("/")]
+fn index() -> &'static str {
+    "hello from Rocket on Cloudflare Workers"
+}
+
+fn rocket(env: Env, _ctx: Context) -> rocket::Rocket<rocket::Build> {
+    rocket::build().manage(env).mount("/", routes![index])
+}
+
+#[event(fetch)]
+pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
+    comet::cloudflare::fetch(req, env, ctx, rocket).await
+}
+```
+
+`comet::cloudflare::fetch` ignites your `Rocket<Build>` on the first request
+of each Worker isolate and reuses the resulting `Rocket<Orbit>` for every
+following request — routes, fairings, and sentinels only run once per
+isolate lifetime.
+
+## Choosing the right features
+
+The `comet` crate is entirely controlled by Cargo features — none of D1,
+Nebula, or WebSocket is compiled unless you ask for it:
+
+```toml
+[dependencies]
+comet = {
+  git = "https://github.com/viniciusamelio/comet",
+  default-features = false,
+  features = ["cloudflare", "cloudflare-d1", "cloudflare-queue", "nebula-d1"]
+}
+```
+
+See the [full feature matrix](/en/docs/cloudflare-adapter#feature-matrix)
+in the Cloudflare adapter page, and the ORM-specific features in
+[Nebula](/en/docs/nebula-orm).
+
+## Next steps
+
+- [Cloudflare adapter](/en/docs/cloudflare-adapter) — dispatch, streaming,
+  typed bindings, R2, WebSocket.
+- [Nebula ORM](/en/docs/nebula-orm) — entities, query builder, migrations.
+- [comet-cli](/en/docs/comet-cli) — the full command reference.
+- [Full example](/en/docs/example-walkthrough) — a D1-backed task API with
+  Queues, R2, and WebSocket, end to end.

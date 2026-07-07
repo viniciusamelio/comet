@@ -2,6 +2,8 @@
 
 Run [Rocket](https://rocket.rs) routes on Cloudflare Workers.
 
+📖 Full documentation: [comet.physikos.app](https://comet.physikos.app)
+
 Rocket's published releases pull in Hyper/Tokio networking that doesn't
 compile to `wasm32-unknown-unknown`. `comet` pairs a patched Rocket (vendored
 in this repo, see [`vendor/rocket/COMET_NOTES.md`](vendor/rocket/COMET_NOTES.md))

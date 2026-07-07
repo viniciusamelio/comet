@@ -1,25 +1,25 @@
 ---
-title: Exemplo completo
-description: Um passeio pelo examples/cloudflare-worker — D1, Queues, R2 e WebSocket juntos.
+title: Full example
+description: A walkthrough of examples/cloudflare-worker — D1, Queues, R2, and WebSocket together.
 ---
 
-O repositório traz um exemplo completo em `examples/cloudflare-worker`: uma
-API de tarefas com D1, chamadas assíncronas de Queue, streaming de objetos
-R2, um endpoint WebSocket de eco, e testes unitários + de integração ponta a
-ponta. Esta página passeia pelas peças principais.
+The repository ships a complete example at `examples/cloudflare-worker`: a
+task API with D1, asynchronous Queue calls, R2 object streaming, a
+WebSocket echo endpoint, and end-to-end unit + integration tests. This page
+walks through the main pieces.
 
-## Layout do projeto
+## Project layout
 
 ```
 examples/cloudflare-worker/
   src/
-    lib.rs          # pub mod app; assets; demo (privado); boards; orgs; tasks; users (público)
-    entry.rs         # glue só-wasm: #[event(fetch)] e #[event(queue)]
-    app.rs           # monta o Rocket, limites de corpo, .manage(env)
-    tasks/           # API de tarefas backed por D1 (o foco do exemplo)
-    assets/          # rotas de upload/download via R2
-    demo/            # /, /echo, /stream, /ws/echo — provas de streaming e WebSocket
-    boards/ orgs/ users/  # entidades Nebula extras, para relacionamentos
+    lib.rs          # pub mod app; assets; demo (private); boards; orgs; tasks; users (public)
+    entry.rs         # wasm-only glue: #[event(fetch)] and #[event(queue)]
+    app.rs           # builds the Rocket, body limits, .manage(env)
+    tasks/           # the D1-backed task API (the example's focus)
+    assets/          # R2 upload/download routes
+    demo/            # /, /echo, /stream, /ws/echo — streaming and WebSocket proofs
+    boards/ orgs/ users/  # extra Nebula entities, for relationships
   migrations/
     0001_init.sql
   tests/
@@ -29,9 +29,9 @@ examples/cloudflare-worker/
   package.json
 ```
 
-## Modelo de dados
+## Data model
 
-A tabela `tasks` (de `migrations/0001_init.sql`):
+The `tasks` table (from `migrations/0001_init.sql`):
 
 ```sql
 CREATE TABLE tasks (
@@ -42,28 +42,28 @@ CREATE TABLE tasks (
 );
 ```
 
-Uma tabela companheira `task_events` é escrita **só** pelo consumidor da
-queue, nunca pelas rotas HTTP — provando o round-trip assíncrono.
+A companion `task_events` table is written **only** by the queue consumer,
+never by the HTTP routes — proving the asynchronous round trip.
 
-`TaskRow` (a entidade Nebula) mapeia a linha crua do D1 (com `done: i32`) e
-converte via `From<TaskRow> for Task` para o `Task` público (com
-`done: bool`) servido como JSON — essa é a manha do "D1 não tem tipo
-booleano" mencionada em [Nebula ORM](/pt-BR/docs/nebula-orm).
+`TaskRow` (the Nebula entity) maps the raw D1 row (with `done: i32`) and
+converts via `From<TaskRow> for Task` into the public `Task` (with
+`done: bool`) served as JSON — that's the "D1 has no boolean type" quirk
+mentioned in [Nebula ORM](/en/docs/nebula-orm).
 
-## Rotas expostas
+## Routes exposed
 
-| Rota | Descrição |
+| Route | Description |
 |---|---|
-| `GET /` | texto de saudação |
-| `POST /echo` | eco de corpo via streaming |
-| `GET /stream` | 3 blocos com pausas reais de 400ms (prova de streaming) |
-| `GET /ws/echo` | eco via WebSocket |
-| `GET /tasks`, `GET /tasks/<id>` | listar/buscar tarefas |
-| `POST /tasks` | criar tarefa (publica evento na queue) |
-| `POST /tasks/<id>/complete` | concluir tarefa (publica evento na queue) |
+| `GET /` | greeting text |
+| `POST /echo` | streamed body echo |
+| `GET /stream` | 3 chunks with real 400ms pauses (streaming proof) |
+| `GET /ws/echo` | WebSocket echo |
+| `GET /tasks`, `GET /tasks/<id>` | list/fetch tasks |
+| `POST /tasks` | create a task (publishes an event to the queue) |
+| `POST /tasks/<id>/complete` | complete a task (publishes an event to the queue) |
 | `PUT /assets/<key..>`, `GET /assets/<key..>` | upload/download via R2 |
 
-## D1: uma rota CRUD
+## D1: a CRUD route
 
 ```rust
 #[get("/tasks/<id>")]
@@ -80,12 +80,12 @@ pub async fn get_task(id: i32, db: D1<DB>) -> ApiResult<Json<Task>> {
 }
 ```
 
-Nenhuma rota faz `env.d1(...)` manualmente — o guard `D1<DB>` já entrega a
-conexão, e o query builder do Nebula monta o SQL.
+No route calls `env.d1(...)` manually — the `D1<DB>` guard already hands
+over the connection, and Nebula's query builder assembles the SQL.
 
-## Queue: produtor e consumidor
+## Queue: producer and consumer
 
-Lado produtor, dentro de `POST /tasks`:
+Producer side, inside `POST /tasks`:
 
 ```rust
 let row = TaskRow::insert()
@@ -100,8 +100,8 @@ let task: Task = row.into();
 publish_task_event(&queue, task.id, TaskEventKind::Created).await?;
 ```
 
-Lado consumidor, em `src/entry.rs` (usa o crate `worker` diretamente, sem
-Nebula, porque roda fora do contexto de uma requisição Rocket):
+Consumer side, in `src/entry.rs` (uses the `worker` crate directly, without
+Nebula, because it runs outside the context of a Rocket request):
 
 ```rust
 #[event(queue)]
@@ -119,7 +119,7 @@ pub async fn queue(batch: MessageBatch<TaskEvent>, env: Env, _ctx: Context) -> R
 }
 ```
 
-## R2: upload e download
+## R2: upload and download
 
 ```rust
 #[put("/assets/<key..>", data = "<body>")]
@@ -140,7 +140,7 @@ pub async fn get_asset(key: PathBuf, bucket: R2Bucket<Assets>) -> Option<R2Objec
 }
 ```
 
-## WebSocket: eco
+## WebSocket: echo
 
 ```rust
 #[get("/ws/echo")]
@@ -164,7 +164,7 @@ pub async fn websocket_echo(ws: WebSocketUpgrade) -> WebSocketResponse {
 }
 ```
 
-## Configurando o `wrangler.jsonc`
+## Configuring `wrangler.jsonc`
 
 ```jsonc
 {
@@ -185,8 +185,8 @@ pub async fn websocket_echo(ws: WebSocketUpgrade) -> WebSocketResponse {
 }
 ```
 
-Os nomes de binding (`DB`, `ASSETS`, `TASK_EVENTS`) precisam bater com as
-constantes `BindingName::NAME` definidas no código Rust:
+The binding names (`DB`, `ASSETS`, `TASK_EVENTS`) need to match the
+`BindingName::NAME` constants defined in the Rust code:
 
 ```rust
 pub struct DB;
@@ -199,47 +199,46 @@ pub struct TaskEvents;
 impl BindingName for TaskEvents { const NAME: &'static str = "TASK_EVENTS"; }
 ```
 
-## Rodando o exemplo
+## Running the example
 
 ```sh
 npx wrangler d1 create comet-cloudflare-worker-example
 npx wrangler queues create task-events
 npx wrangler r2 bucket create comet-cloudflare-worker-example-assets
-# cole o database_id em wrangler.jsonc, em d1_databases[0]
-npx wrangler d1 migrations apply DB --local     # para wrangler dev
-npx wrangler d1 migrations apply DB --remote    # para wrangler deploy
+# paste the database_id into wrangler.jsonc, in d1_databases[0]
+npx wrangler d1 migrations apply DB --local     # for wrangler dev
+npx wrangler d1 migrations apply DB --remote    # for wrangler deploy
 
 cd examples/cloudflare-worker
 npm install
 npm run dev
 ```
 
-## Rodando os testes
+## Running the tests
 
 ```sh
-# checagem de build para o alvo wasm32
+# build check for the wasm32 target
 rustup target add wasm32-unknown-unknown
 npm run check
 
-# testes unitários, nativos, sem precisar de Node/wasm
+# unit tests, native, no Node/wasm needed
 npm run test
 
-# integração real, via wrangler dev (precisa de rustup, wasm32, jq, npm)
+# real integration, via wrangler dev (needs rustup, wasm32, jq, npm)
 npm run test:integration
 
-# teste de performance informativo (autocannon) — só falha em erro de
-# conexão ou respostas não-2xx, não em throughput
+# informational performance test (autocannon) — only fails on connection
+# errors or non-2xx responses, not on throughput
 npm run test:perf
 ```
 
-`tests/integration.sh` reseta o estado local de D1/R2, aplica as migrations,
-sobe `wrangler dev` na porta 8788, e então: bate em `/`, faz um `/echo`
-pequeno, faz o round-trip de um corpo de 1MiB em `/echo` byte a byte
-(provando ingestão via streaming, não bufferizada), confere o tempo até o
-primeiro byte de `/stream` contra o tempo total (provando streaming de
-resposta), faz o round-trip de um objeto de 1MiB via `PUT`/`GET
-/assets/...`, dirige um cliente WebSocket de verdade contra `/ws/echo`,
-exercita o CRUD de tarefas (incluindo 400 para título vazio e 404 para id
-inexistente), e então espera 8s (o `max_batch_timeout` local da queue é 5s)
-para confirmar, via `wrangler d1 execute`, que os eventos `created` e
-`completed` chegaram em `task_events`.
+`tests/integration.sh` resets local D1/R2 state, applies the migrations,
+starts `wrangler dev` on port 8788, and then: hits `/`, does a small
+`/echo`, round-trips a 1MiB body through `/echo` byte for byte (proving
+streamed, not buffered, ingestion), checks `/stream`'s time-to-first-byte
+against total time (proving response streaming), round-trips a 1MiB object
+through `PUT`/`GET /assets/...`, drives a real WebSocket client against
+`/ws/echo`, exercises task CRUD (including 400 for a blank title and 404
+for a missing id), and then waits 8s (the queue's local
+`max_batch_timeout` is 5s) to confirm, via `wrangler d1 execute`, that both
+the `created` and `completed` events landed in `task_events`.
