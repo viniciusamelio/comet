@@ -8,6 +8,8 @@ use serde::Deserialize;
 use url::form_urlencoded;
 
 use crate::config::{AppleProviderConfig, GitHubProviderConfig, GoogleProviderConfig, ProviderConfig};
+#[cfg(feature = "cloudflare")]
+use crate::oidc::{self, OidcValidation};
 use crate::session;
 #[cfg(feature = "cloudflare")]
 use crate::session::ProviderIdentity;
@@ -336,59 +338,164 @@ pub async fn exchange_code(
 
 #[cfg(feature = "cloudflare")]
 pub async fn fetch_identity(
+    config: &AuthConfig,
+    env: &worker::Env,
     provider: OAuthProviderId,
     tokens: &ProviderTokens,
+    expected_nonce: Option<&str>,
 ) -> Result<ProviderIdentity, AuthError> {
     match provider {
-        OAuthProviderId::Google => fetch_google_identity(tokens).await,
-        OAuthProviderId::Apple => fetch_apple_identity(tokens).await,
+        OAuthProviderId::Google => validate_google_identity(config, env, tokens, expected_nonce).await,
+        OAuthProviderId::Apple => validate_apple_identity(config, env, tokens, expected_nonce).await,
         OAuthProviderId::GitHub => fetch_github_identity(tokens).await,
     }
 }
 
 #[cfg(feature = "cloudflare")]
-async fn fetch_google_identity(tokens: &ProviderTokens) -> Result<ProviderIdentity, AuthError> {
-    let access_token = tokens
-        .access_token
+pub async fn validate_native_identity(
+    config: &AuthConfig,
+    env: &worker::Env,
+    provider: OAuthProviderId,
+    id_token: &str,
+    expected_nonce: Option<&str>,
+) -> Result<ProviderIdentity, AuthError> {
+    let tokens = ProviderTokens {
+        access_token: None,
+        id_token: Some(id_token.to_owned()),
+        token_type: None,
+        scope: None,
+        expires_in: None,
+    };
+
+    match provider {
+        OAuthProviderId::Google => validate_google_identity(config, env, &tokens, expected_nonce).await,
+        OAuthProviderId::Apple => validate_apple_identity(config, env, &tokens, expected_nonce).await,
+        OAuthProviderId::GitHub => Err(AuthError::UnsupportedProvider("github_native".into())),
+    }
+}
+
+#[cfg(feature = "cloudflare")]
+async fn validate_google_identity(
+    config: &AuthConfig,
+    env: &worker::Env,
+    tokens: &ProviderTokens,
+    expected_nonce: Option<&str>,
+) -> Result<ProviderIdentity, AuthError> {
+    let id_token = tokens
+        .id_token
         .as_deref()
-        .ok_or_else(|| AuthError::ProviderRequest("google response missing access_token".into()))?;
-    let mut response = get_json(
-        "https://openidconnect.googleapis.com/v1/userinfo",
-        &[("authorization", &format!("Bearer {access_token}"))],
+        .ok_or_else(|| AuthError::ProviderRequest("google response missing id_token".into()))?;
+    let audiences = google_audiences(config, env)?;
+    let claims = oidc::validate_rs256_id_token(
+        "https://www.googleapis.com/oauth2/v3/certs",
+        id_token,
+        OidcValidation {
+            issuer: "https://accounts.google.com",
+            audiences: &audiences,
+            expected_nonce,
+        },
     )
     .await?;
-    let profile = response.json::<GoogleUserInfo>().await?;
     Ok(ProviderIdentity {
         provider: "google".to_owned(),
-        provider_account_id: profile.sub,
-        email: profile.email,
-        email_verified: profile.email_verified.unwrap_or(false),
-        name: profile.name,
-        avatar_url: profile.picture,
+        provider_account_id: claims.sub,
+        email: claims.email,
+        email_verified: claims.email_verified.map(|value| value.as_bool()).unwrap_or(false),
+        name: claims.name,
+        avatar_url: claims.picture,
         raw_profile_json: None,
     })
 }
 
 #[cfg(feature = "cloudflare")]
-async fn fetch_apple_identity(tokens: &ProviderTokens) -> Result<ProviderIdentity, AuthError> {
+async fn validate_apple_identity(
+    config: &AuthConfig,
+    env: &worker::Env,
+    tokens: &ProviderTokens,
+    expected_nonce: Option<&str>,
+) -> Result<ProviderIdentity, AuthError> {
     let id_token = tokens
         .id_token
         .as_deref()
         .ok_or_else(|| AuthError::ProviderRequest("apple response missing id_token".into()))?;
-    let claims = decode_unverified_jwt_payload::<AppleClaims>(id_token)?;
+    let audiences = apple_audiences(config, env)?;
+    let claims = oidc::validate_rs256_id_token(
+        "https://appleid.apple.com/auth/keys",
+        id_token,
+        OidcValidation {
+            issuer: "https://appleid.apple.com",
+            audiences: &audiences,
+            expected_nonce,
+        },
+    )
+    .await?;
     Ok(ProviderIdentity {
         provider: "apple".to_owned(),
         provider_account_id: claims.sub,
         email: claims.email,
-        email_verified: claims
-            .email_verified
-            .as_deref()
-            .map(|value| value == "true" || value == "1")
-            .unwrap_or(false),
-        name: None,
+        email_verified: claims.email_verified.map(|value| value.as_bool()).unwrap_or(false),
+        name: claims.name,
         avatar_url: None,
         raw_profile_json: None,
     })
+}
+
+#[cfg(feature = "cloudflare")]
+fn google_audiences(config: &AuthConfig, env: &worker::Env) -> Result<Vec<String>, AuthError> {
+    let ProviderConfig::Google(google) = config
+        .provider_config("google")
+        .ok_or_else(|| AuthError::ProviderNotConfigured("google".into()))?
+    else {
+        return Err(AuthError::ProviderNotConfigured("google".into()));
+    };
+
+    let mut audiences = Vec::new();
+    if let Some(name) = google.web_client_id_env.as_deref() {
+        if let Some(value) = env.get_env(name)? {
+            audiences.push(value);
+        }
+    }
+    for name in &google.native_client_id_envs {
+        if let Some(value) = env.get_env(name)? {
+            audiences.push(value);
+        }
+    }
+    if audiences.is_empty() {
+        return Err(AuthError::MissingProviderSetting {
+            provider: "google",
+            setting: "web_client_id_env/native_client_id_env",
+        });
+    }
+    Ok(audiences)
+}
+
+#[cfg(feature = "cloudflare")]
+fn apple_audiences(config: &AuthConfig, env: &worker::Env) -> Result<Vec<String>, AuthError> {
+    let ProviderConfig::Apple(apple) = config
+        .provider_config("apple")
+        .ok_or_else(|| AuthError::ProviderNotConfigured("apple".into()))?
+    else {
+        return Err(AuthError::ProviderNotConfigured("apple".into()));
+    };
+
+    let mut audiences = Vec::new();
+    if let Some(name) = apple.service_id_env.as_deref() {
+        if let Some(value) = env.get_env(name)? {
+            audiences.push(value);
+        }
+    }
+    for name in &apple.native_audience_envs {
+        if let Some(value) = env.get_env(name)? {
+            audiences.push(value);
+        }
+    }
+    if audiences.is_empty() {
+        return Err(AuthError::MissingProviderSetting {
+            provider: "apple",
+            setting: "service_id_env/native_audience_env",
+        });
+    }
+    Ok(audiences)
 }
 
 #[cfg(feature = "cloudflare")]
@@ -457,22 +564,6 @@ async fn get_json(url: &str, headers: &[(&str, &str)]) -> Result<worker::Respons
 }
 
 #[derive(Debug, Deserialize)]
-struct GoogleUserInfo {
-    sub: String,
-    email: Option<String>,
-    email_verified: Option<bool>,
-    name: Option<String>,
-    picture: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AppleClaims {
-    sub: String,
-    email: Option<String>,
-    email_verified: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct GitHubUser {
     id: u64,
     login: Option<String>,
@@ -486,16 +577,6 @@ struct GitHubEmail {
     email: String,
     primary: bool,
     verified: bool,
-}
-
-pub fn decode_unverified_jwt_payload<T: for<'de> Deserialize<'de>>(jwt: &str) -> Result<T, AuthError> {
-    let payload = jwt
-        .split('.')
-        .nth(1)
-        .ok_or_else(|| AuthError::ProviderRequest("malformed jwt".into()))?;
-    let bytes = base64ct::Base64UrlUnpadded::decode_vec(payload)
-        .map_err(|_| AuthError::ProviderRequest("malformed jwt payload".into()))?;
-    serde_json::from_slice(&bytes).map_err(AuthError::from)
 }
 
 #[cfg(test)]

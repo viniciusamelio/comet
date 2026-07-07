@@ -1,6 +1,7 @@
 mod config;
 mod cookie;
 mod error;
+mod oidc;
 mod oauth;
 mod routes;
 mod session;
