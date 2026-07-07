@@ -1,12 +1,13 @@
 ---
 title: Exemplo completo
-description: Um passeio pelo examples/cloudflare-worker — D1, Queues, R2 e WebSocket juntos.
+description: Um passeio pelo examples/cloudflare-worker — D1, Queues, R2, WebSocket e auth juntos.
 ---
 
 O repositório traz um exemplo completo em `examples/cloudflare-worker`: uma
 API de tarefas com D1, chamadas assíncronas de Queue, streaming de objetos
-R2, um endpoint WebSocket de eco, e testes unitários + de integração ponta a
-ponta. Esta página passeia pelas peças principais.
+R2, um endpoint WebSocket de eco, `comet-auth` montado no mesmo Worker, e
+testes unitários + de integração ponta a ponta. Esta página passeia pelas
+peças principais.
 
 ## Layout do projeto
 
@@ -15,13 +16,14 @@ examples/cloudflare-worker/
   src/
     lib.rs          # pub mod app; assets; demo (privado); boards; orgs; tasks; users (público)
     entry.rs         # glue só-wasm: #[event(fetch)] e #[event(queue)]
-    app.rs           # monta o Rocket, limites de corpo, .manage(env)
+    app.rs           # monta o Rocket, limites de corpo, auth, .manage(env)
     tasks/           # API de tarefas backed por D1 (o foco do exemplo)
     assets/          # rotas de upload/download via R2
-    demo/            # /, /echo, /stream, /ws/echo — provas de streaming e WebSocket
+    demo/            # /, /echo, /stream, /ws/echo, /private/me
     boards/ orgs/ users/  # entidades Nebula extras, para relacionamentos
   migrations/
     0001_init.sql
+    0002_comet_auth.sql
   tests/
     integration.sh
     perf.sh
@@ -58,6 +60,11 @@ booleano" mencionada em [Nebula ORM](/pt-BR/docs/nebula-orm).
 | `POST /echo` | eco de corpo via streaming |
 | `GET /stream` | 3 blocos com pausas reais de 400ms (prova de streaming) |
 | `GET /ws/echo` | eco via WebSocket |
+| `GET /auth/session` | estado atual da sessão |
+| `GET /auth/<provider>/start` | inicia OAuth Google, Apple ou GitHub |
+| `POST /auth/native/google`, `POST /auth/native/apple` | login nativo por identity token |
+| `POST /auth/logout` | revoga a sessão atual |
+| `GET /private/me` | rota protegida com `#[comet_auth::requires_auth]` |
 | `GET /tasks`, `GET /tasks/<id>` | listar/buscar tarefas |
 | `POST /tasks` | criar tarefa (publica evento na queue) |
 | `POST /tasks/<id>/complete` | concluir tarefa (publica evento na queue) |
@@ -164,6 +171,35 @@ pub async fn websocket_echo(ws: WebSocketUpgrade) -> WebSocketResponse {
 }
 ```
 
+## Auth: sessão e rota protegida
+
+`src/app.rs` monta as rotas de auth no mesmo Rocket:
+
+```rust
+rocket::custom(config)
+    .manage(env)
+    .attach(comet_auth::Auth::<DB, AuthKv>::fairing(auth_config))
+    .mount("/auth", comet_auth::routes::<DB, AuthKv>())
+    .mount("/", routes![index, private_me /* ... */])
+```
+
+E `src/demo/routes.rs` mostra a ergonomia esperada para proteger handlers:
+
+```rust
+#[comet_auth::requires_auth]
+#[get("/private/me")]
+pub async fn private_me(session: comet_auth::AuthSession) -> Json<PrivateMeResponse> {
+    Json(PrivateMeResponse {
+        session_id: session.id,
+        user_id: session.user.id,
+        email: session.user.primary_email,
+    })
+}
+```
+
+As rotas públicas continuam públicas. Sem sessão, `/private/me` responde
+`401 Unauthorized`, enquanto `/auth/session` retorna `authenticated: false`.
+
 ## Configurando o `wrangler.jsonc`
 
 ```jsonc
@@ -177,6 +213,7 @@ pub async fn websocket_echo(ws: WebSocketUpgrade) -> WebSocketResponse {
     "database_id": "00000000-0000-0000-0000-000000000000",
     "migrations_dir": "migrations"
   }],
+  "kv_namespaces": [{ "binding": "AUTH_KV", "id": "00000000000000000000000000000000" }],
   "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "comet-cloudflare-worker-example-assets" }],
   "queues": {
     "producers": [{ "binding": "TASK_EVENTS", "queue": "task-events" }],
@@ -185,12 +222,15 @@ pub async fn websocket_echo(ws: WebSocketUpgrade) -> WebSocketResponse {
 }
 ```
 
-Os nomes de binding (`DB`, `ASSETS`, `TASK_EVENTS`) precisam bater com as
+Os nomes de binding (`DB`, `AUTH_KV`, `ASSETS`, `TASK_EVENTS`) precisam bater com as
 constantes `BindingName::NAME` definidas no código Rust:
 
 ```rust
 pub struct DB;
 impl BindingName for DB { const NAME: &'static str = "DB"; }
+
+pub struct AuthKv;
+impl BindingName for AuthKv { const NAME: &'static str = "AUTH_KV"; }
 
 pub struct Assets;
 impl BindingName for Assets { const NAME: &'static str = "ASSETS"; }
@@ -203,9 +243,10 @@ impl BindingName for TaskEvents { const NAME: &'static str = "TASK_EVENTS"; }
 
 ```sh
 npx wrangler d1 create comet-cloudflare-worker-example
+npx wrangler kv namespace create AUTH_KV
 npx wrangler queues create task-events
 npx wrangler r2 bucket create comet-cloudflare-worker-example-assets
-# cole o database_id em wrangler.jsonc, em d1_databases[0]
+# cole database_id e id do KV em wrangler.jsonc
 npx wrangler d1 migrations apply DB --local     # para wrangler dev
 npx wrangler d1 migrations apply DB --remote    # para wrangler deploy
 

@@ -1,0 +1,155 @@
+---
+title: Autenticação
+description: Configurando comet-auth com OAuth social, D1/KV, sessões e rotas protegidas.
+---
+
+`comet-auth` adiciona autenticação a aplicações Comet/Rocket em Cloudflare
+Workers. Ele mantém usuários, contas vinculadas e sessões em D1, usa KV para
+estado OAuth/cache, e expõe guards Rocket para proteger rotas.
+
+## Bindings
+
+Configure um D1 e um KV no `wrangler.jsonc`:
+
+```jsonc
+{
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "my-app",
+    "database_id": "...",
+    "migrations_dir": "migrations"
+  }],
+  "kv_namespaces": [{
+    "binding": "AUTH_KV",
+    "id": "..."
+  }]
+}
+```
+
+Adicione a migration de auth:
+
+```sh
+comet auth init --db-binding DB --kv-binding AUTH_KV
+npx wrangler d1 migrations apply DB --local
+npx wrangler d1 migrations apply DB --remote
+```
+
+## Montagem no Rocket
+
+```rust
+pub struct DB;
+impl comet::cloudflare::BindingName for DB {
+    const NAME: &'static str = "DB";
+}
+
+pub struct AuthKv;
+impl comet::cloudflare::BindingName for AuthKv {
+    const NAME: &'static str = "AUTH_KV";
+}
+
+let auth_config = comet_auth::AuthConfig::from_env()
+    .base_url("https://example.com")
+    .provider(
+        comet_auth::providers::Google::from_env()
+            .web_client_id_env("GOOGLE_WEB_CLIENT_ID")
+            .web_client_secret_env("GOOGLE_WEB_CLIENT_SECRET")
+            .native_client_id_env("GOOGLE_IOS_CLIENT_ID")
+            .native_client_id_env("GOOGLE_ANDROID_CLIENT_ID"),
+    )
+    .provider(
+        comet_auth::providers::Apple::from_env()
+            .service_id_env("APPLE_SERVICE_ID")
+            .team_id_env("APPLE_TEAM_ID")
+            .key_id_env("APPLE_KEY_ID")
+            .private_key_pkcs8_pem_env("APPLE_PRIVATE_KEY_PKCS8_PEM")
+            .native_audience_env("APPLE_IOS_BUNDLE_ID"),
+    )
+    .provider(
+        comet_auth::providers::GitHub::from_env()
+            .client_id_env("GITHUB_CLIENT_ID")
+            .client_secret_env("GITHUB_CLIENT_SECRET"),
+    );
+
+rocket::build()
+    .attach(comet_auth::Auth::<DB, AuthKv>::fairing(auth_config))
+    .mount("/auth", comet_auth::routes::<DB, AuthKv>());
+```
+
+## Rotas protegidas
+
+Coloque `#[comet_auth::requires_auth]` acima do atributo de rota Rocket:
+
+```rust
+#[comet_auth::requires_auth]
+#[rocket::get("/private/me")]
+async fn private_me(session: comet_auth::AuthSession) -> &'static str {
+    "authenticated"
+}
+```
+
+Para rotas que aceitam visitantes anônimos:
+
+```rust
+#[comet_auth::requires_auth(optional)]
+#[rocket::get("/maybe")]
+async fn maybe(session: comet_auth::OptionalAuthSession) -> &'static str {
+    if session.0.is_some() { "signed in" } else { "anonymous" }
+}
+```
+
+`scope = "..."` já é aceito e hoje significa autenticação obrigatória. O
+enforcement real de RBAC está planejado para a próxima fase.
+
+## Secrets de provider
+
+Configure secrets com `wrangler secret put <NAME>`.
+
+Comuns:
+
+- `COMET_AUTH_BASE_URL`: origem pública usada para callbacks OAuth.
+- `COMET_AUTH_TOKEN_PEPPER`: segredo extra usado no hash dos tokens de sessão.
+
+Google:
+
+- `GOOGLE_WEB_CLIENT_ID`
+- `GOOGLE_WEB_CLIENT_SECRET`
+- `GOOGLE_IOS_CLIENT_ID`, opcional para login nativo
+- `GOOGLE_ANDROID_CLIENT_ID`, opcional para login nativo
+
+Apple:
+
+- `APPLE_SERVICE_ID`
+- `APPLE_TEAM_ID`
+- `APPLE_KEY_ID`
+- `APPLE_PRIVATE_KEY_PKCS8_PEM`
+- `APPLE_IOS_BUNDLE_ID`, opcional para login nativo
+
+GitHub:
+
+- `GITHUB_CLIENT_ID`
+- `GITHUB_CLIENT_SECRET`
+
+## Redirect URIs
+
+Cadastre estes callbacks nos dashboards dos providers:
+
+- Google: `<COMET_AUTH_BASE_URL>/auth/google/callback`
+- Apple: `<COMET_AUTH_BASE_URL>/auth/apple/callback`
+- GitHub: `<COMET_AUTH_BASE_URL>/auth/github/callback`
+
+## Login nativo
+
+Clientes nativos devem usar os SDKs oficiais do provider para obter um identity
+token e então enviá-lo ao Comet:
+
+```sh
+curl -X POST https://example.com/auth/native/google \
+  -H 'content-type: application/json' \
+  -d '{"id_token":"...","nonce":"..."}'
+```
+
+Apple usa o mesmo formato em `/auth/native/apple`.
+
+Não use WebView embutida para login Google. Para login browser em app mobile,
+use navegador seguro do sistema, como `ASWebAuthenticationSession`,
+`SFSafariViewController` ou Chrome Custom Tabs.

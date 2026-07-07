@@ -5,6 +5,7 @@
     "getting-started",
     "cloudflare-adapter",
     "nebula-orm",
+    "auth",
     "comet-cli",
     "example-walkthrough"
   ]
