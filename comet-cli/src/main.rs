@@ -9,7 +9,7 @@ mod schema_dump;
 mod snapshot;
 
 use clap::Parser;
-use cli::{Command, GenerateCommand, MigrateCommand, TestCommand};
+use cli::{AuthCommand, Command, GenerateCommand, MigrateCommand, TestCommand};
 
 fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
@@ -21,6 +21,7 @@ fn main() -> anyhow::Result<()> {
         Command::Migrate(MigrateCommand::Init(args)) => commands::migrate::init(args),
         Command::Migrate(MigrateCommand::Generate(args)) => commands::migrate::generate(args),
         Command::Migrate(MigrateCommand::Status(args)) => commands::migrate::status(args),
+        Command::Auth(AuthCommand::Init(args)) => commands::auth::init(args),
         Command::Test(TestCommand::Unit(args)) => commands::test::unit(args),
         Command::Test(TestCommand::Integration(args)) => commands::test::integration(args),
         Command::Test(TestCommand::Perf(args)) => commands::test::perf(args),

@@ -138,7 +138,10 @@ pub fn generate_token() -> Result<String, AuthError> {
 pub fn generate_id(prefix: &str) -> Result<String, AuthError> {
     let mut bytes = [0u8; ID_BYTES];
     getrandom::fill(&mut bytes).map_err(AuthError::Random)?;
-    Ok(format!("{prefix}_{}", Base64UrlUnpadded::encode_string(&bytes)))
+    Ok(format!(
+        "{prefix}_{}",
+        Base64UrlUnpadded::encode_string(&bytes)
+    ))
 }
 
 #[allow(dead_code)]
@@ -179,7 +182,10 @@ mod tests {
 
     #[test]
     fn token_hash_uses_pepper() {
-        assert_ne!(hash_token("token", None), hash_token("token", Some("pepper")));
+        assert_ne!(
+            hash_token("token", None),
+            hash_token("token", Some("pepper"))
+        );
     }
 
     #[test]

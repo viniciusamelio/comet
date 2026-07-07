@@ -1,13 +1,15 @@
 #![cfg_attr(not(feature = "cloudflare"), allow(dead_code))]
 
 use base64ct::Encoding;
-use p256::ecdsa::signature::Signer;
 use p256::ecdsa::SigningKey;
+use p256::ecdsa::signature::Signer;
 use p256::pkcs8::DecodePrivateKey;
 use serde::Deserialize;
 use url::form_urlencoded;
 
-use crate::config::{AppleProviderConfig, GitHubProviderConfig, GoogleProviderConfig, ProviderConfig};
+use crate::config::{
+    AppleProviderConfig, GitHubProviderConfig, GoogleProviderConfig, ProviderConfig,
+};
 #[cfg(feature = "cloudflare")]
 use crate::oidc::{self, OidcValidation};
 use crate::session;
@@ -114,7 +116,14 @@ pub fn start_oauth(
     let code_challenge = session::hash_token(&code_verifier, None);
     let redirect_uri = redirect_uri(config, provider)?;
     let secrets = provider_secrets(config, env, provider)?;
-    let authorize_url = authorize_url(provider, &secrets.client_id, &redirect_uri, &state, &nonce, &code_challenge);
+    let authorize_url = authorize_url(
+        provider,
+        &secrets.client_id,
+        &redirect_uri,
+        &state,
+        &nonce,
+        &code_challenge,
+    );
 
     Ok(OAuthStart {
         provider,
@@ -149,7 +158,9 @@ pub fn provider_secrets(
         (OAuthProviderId::Google, ProviderConfig::Google(config)) => google_secrets(env, config),
         (OAuthProviderId::Apple, ProviderConfig::Apple(config)) => apple_secrets(env, config),
         (OAuthProviderId::GitHub, ProviderConfig::GitHub(config)) => github_secrets(env, config),
-        _ => Err(AuthError::ProviderNotConfigured(provider.as_str().to_owned())),
+        _ => Err(AuthError::ProviderNotConfigured(
+            provider.as_str().to_owned(),
+        )),
     }
 }
 
@@ -158,7 +169,12 @@ fn google_secrets(
     config: &GoogleProviderConfig,
 ) -> Result<ProviderSecrets, AuthError> {
     Ok(ProviderSecrets {
-        client_id: required_env(env, "google", "web_client_id_env", config.web_client_id_env.as_deref())?,
+        client_id: required_env(
+            env,
+            "google",
+            "web_client_id_env",
+            config.web_client_id_env.as_deref(),
+        )?,
         client_secret: Some(required_env(
             env,
             "google",
@@ -172,7 +188,12 @@ fn apple_secrets(
     env: &impl EnvReader,
     config: &AppleProviderConfig,
 ) -> Result<ProviderSecrets, AuthError> {
-    let client_id = required_env(env, "apple", "service_id_env", config.service_id_env.as_deref())?;
+    let client_id = required_env(
+        env,
+        "apple",
+        "service_id_env",
+        config.service_id_env.as_deref(),
+    )?;
     let client_secret = match config.client_secret_env.as_deref() {
         Some(name) => Some(required_env(env, "apple", "client_secret_env", Some(name))?),
         None => Some(generate_apple_client_secret(env, config, &client_id)?),
@@ -211,13 +232,10 @@ fn generate_apple_client_secret(
         "aud": "https://appleid.apple.com",
         "sub": service_id,
     });
-    let signing_input = format!(
-        "{}.{}",
-        base64_json(&header)?,
-        base64_json(&claims)?,
-    );
-    let signing_key = SigningKey::from_pkcs8_pem(&private_key)
-        .map_err(|error| AuthError::ProviderRequest(format!("invalid apple private key: {error}")))?;
+    let signing_input = format!("{}.{}", base64_json(&header)?, base64_json(&claims)?,);
+    let signing_key = SigningKey::from_pkcs8_pem(&private_key).map_err(|error| {
+        AuthError::ProviderRequest(format!("invalid apple private key: {error}"))
+    })?;
     let signature: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
     let signature = base64ct::Base64UrlUnpadded::encode_string(&signature.to_bytes());
 
@@ -235,7 +253,12 @@ fn github_secrets(
     config: &GitHubProviderConfig,
 ) -> Result<ProviderSecrets, AuthError> {
     Ok(ProviderSecrets {
-        client_id: required_env(env, "github", "client_id_env", config.client_id_env.as_deref())?,
+        client_id: required_env(
+            env,
+            "github",
+            "client_id_env",
+            config.client_id_env.as_deref(),
+        )?,
         client_secret: Some(required_env(
             env,
             "github",
@@ -269,8 +292,14 @@ fn authorize_url(
             "https://accounts.google.com/o/oauth2/v2/auth",
             "openid email profile",
         ),
-        OAuthProviderId::Apple => ("https://appleid.apple.com/auth/authorize", "openid email name"),
-        OAuthProviderId::GitHub => ("https://github.com/login/oauth/authorize", "read:user user:email"),
+        OAuthProviderId::Apple => (
+            "https://appleid.apple.com/auth/authorize",
+            "openid email name",
+        ),
+        OAuthProviderId::GitHub => (
+            "https://github.com/login/oauth/authorize",
+            "read:user user:email",
+        ),
     };
 
     let mut query = form_urlencoded::Serializer::new(String::new());
@@ -333,7 +362,10 @@ pub async fn exchange_code(
     if response.status_code() >= 400 {
         return Err(AuthError::ProviderRequest(response.text().await?));
     }
-    response.json::<ProviderTokens>().await.map_err(AuthError::from)
+    response
+        .json::<ProviderTokens>()
+        .await
+        .map_err(AuthError::from)
 }
 
 #[cfg(feature = "cloudflare")]
@@ -345,8 +377,12 @@ pub async fn fetch_identity(
     expected_nonce: Option<&str>,
 ) -> Result<ProviderIdentity, AuthError> {
     match provider {
-        OAuthProviderId::Google => validate_google_identity(config, env, tokens, expected_nonce).await,
-        OAuthProviderId::Apple => validate_apple_identity(config, env, tokens, expected_nonce).await,
+        OAuthProviderId::Google => {
+            validate_google_identity(config, env, tokens, expected_nonce).await
+        }
+        OAuthProviderId::Apple => {
+            validate_apple_identity(config, env, tokens, expected_nonce).await
+        }
         OAuthProviderId::GitHub => fetch_github_identity(tokens).await,
     }
 }
@@ -368,8 +404,12 @@ pub async fn validate_native_identity(
     };
 
     match provider {
-        OAuthProviderId::Google => validate_google_identity(config, env, &tokens, expected_nonce).await,
-        OAuthProviderId::Apple => validate_apple_identity(config, env, &tokens, expected_nonce).await,
+        OAuthProviderId::Google => {
+            validate_google_identity(config, env, &tokens, expected_nonce).await
+        }
+        OAuthProviderId::Apple => {
+            validate_apple_identity(config, env, &tokens, expected_nonce).await
+        }
         OAuthProviderId::GitHub => Err(AuthError::UnsupportedProvider("github_native".into())),
     }
 }
@@ -400,7 +440,10 @@ async fn validate_google_identity(
         provider: "google".to_owned(),
         provider_account_id: claims.sub,
         email: claims.email,
-        email_verified: claims.email_verified.map(|value| value.as_bool()).unwrap_or(false),
+        email_verified: claims
+            .email_verified
+            .map(|value| value.as_bool())
+            .unwrap_or(false),
         name: claims.name,
         avatar_url: claims.picture,
         raw_profile_json: None,
@@ -433,7 +476,10 @@ async fn validate_apple_identity(
         provider: "apple".to_owned(),
         provider_account_id: claims.sub,
         email: claims.email,
-        email_verified: claims.email_verified.map(|value| value.as_bool()).unwrap_or(false),
+        email_verified: claims
+            .email_verified
+            .map(|value| value.as_bool())
+            .unwrap_or(false),
         name: claims.name,
         avatar_url: None,
         raw_profile_json: None,
@@ -513,7 +559,10 @@ async fn fetch_github_identity(tokens: &ProviderTokens) -> Result<ProviderIdenti
     let mut user_response = get_json("https://api.github.com/user", &headers).await?;
     let user = user_response.json::<GitHubUser>().await?;
     let mut emails_response = get_json("https://api.github.com/user/emails", &headers).await?;
-    let emails = emails_response.json::<Vec<GitHubEmail>>().await.unwrap_or_default();
+    let emails = emails_response
+        .json::<Vec<GitHubEmail>>()
+        .await
+        .unwrap_or_default();
     let primary_email = emails
         .iter()
         .find(|email| email.primary && email.verified)
@@ -541,12 +590,16 @@ async fn post_form(
     let mut init = worker::RequestInit::new();
     init.with_method(worker::Method::Post);
     init.with_body(Some(worker::wasm_bindgen::JsValue::from_str(body)));
-    init.headers.set("content-type", "application/x-www-form-urlencoded")?;
+    init.headers
+        .set("content-type", "application/x-www-form-urlencoded")?;
     for (name, value) in headers {
         init.headers.set(name, value)?;
     }
     let request = worker::Request::new_with_init(url, &init)?;
-    worker::Fetch::Request(request).send().await.map_err(AuthError::from)
+    worker::Fetch::Request(request)
+        .send()
+        .await
+        .map_err(AuthError::from)
 }
 
 #[cfg(feature = "cloudflare")]
@@ -582,8 +635,8 @@ struct GitHubEmail {
 #[cfg(test)]
 mod tests {
     use super::{OAuthProviderId, StaticEnv, form_body, start_oauth};
-    use crate::providers;
     use crate::AuthConfig;
+    use crate::providers;
 
     #[test]
     fn start_google_oauth_builds_authorize_url() {
@@ -598,15 +651,26 @@ mod tests {
 
         let start = start_oauth(&config, &env, OAuthProviderId::Google, None).unwrap();
 
-        assert!(start.authorize_url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"));
+        assert!(
+            start
+                .authorize_url
+                .starts_with("https://accounts.google.com/o/oauth2/v2/auth?")
+        );
         assert!(start.authorize_url.contains("client_id=gid"));
         assert!(start.authorize_url.contains("code_challenge_method=S256"));
-        assert!(start.authorize_url.contains("redirect_uri=https%3A%2F%2Fapi.example.com%2Fauth%2Fgoogle%2Fcallback"));
+        assert!(
+            start
+                .authorize_url
+                .contains("redirect_uri=https%3A%2F%2Fapi.example.com%2Fauth%2Fgoogle%2Fcallback")
+        );
     }
 
     #[test]
     fn form_body_url_encodes_values() {
-        assert_eq!(form_body(&[("scope", "openid email")]), "scope=openid+email");
+        assert_eq!(
+            form_body(&[("scope", "openid email")]),
+            "scope=openid+email"
+        );
     }
 
     #[test]

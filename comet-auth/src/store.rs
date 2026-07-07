@@ -32,7 +32,12 @@ pub struct OAuthState {
 
 #[async_trait(?Send)]
 pub trait OAuthStateStore {
-    async fn put(&self, state_hash: &str, state: &OAuthState, ttl_seconds: u64) -> Result<(), AuthError>;
+    async fn put(
+        &self,
+        state_hash: &str,
+        state: &OAuthState,
+        ttl_seconds: u64,
+    ) -> Result<(), AuthError>;
     async fn take(&self, state_hash: &str) -> Result<Option<OAuthState>, AuthError>;
 }
 
@@ -378,7 +383,10 @@ impl SessionCache for KvSessionCache {
 
     async fn put(&self, session: &CachedSession, ttl_seconds: u64) -> Result<(), AuthError> {
         self.kv
-            .put(&self.key(&session.token_hash), serde_json::to_string(session)?)?
+            .put(
+                &self.key(&session.token_hash),
+                serde_json::to_string(session)?,
+            )?
             .expiration_ttl(ttl_seconds)
             .execute()
             .await?;
@@ -415,7 +423,12 @@ impl KvOAuthStateStore {
 #[cfg(feature = "cloudflare")]
 #[async_trait(?Send)]
 impl OAuthStateStore for KvOAuthStateStore {
-    async fn put(&self, state_hash: &str, state: &OAuthState, ttl_seconds: u64) -> Result<(), AuthError> {
+    async fn put(
+        &self,
+        state_hash: &str,
+        state: &OAuthState,
+        ttl_seconds: u64,
+    ) -> Result<(), AuthError> {
         self.kv
             .put(&self.key(state_hash), serde_json::to_string(state)?)?
             .expiration_ttl(ttl_seconds)

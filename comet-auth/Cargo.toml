@@ -7,13 +7,15 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/viniciusamelio/comet"
 
 [features]
-default = ["native-client"]
+default = ["native-client", "macros"]
 cloudflare = ["dep:comet", "dep:worker"]
+macros = ["dep:comet-auth-macros"]
 native-client = []
 
 [dependencies]
 base64ct = { version = "1", features = ["alloc"] }
 comet = { path = "..", default-features = false, features = ["cloudflare-d1", "cloudflare-kv"], optional = true }
+comet-auth-macros = { path = "../comet-auth-macros", optional = true }
 crypto-bigint = "0.7"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 js-sys = "0.3"

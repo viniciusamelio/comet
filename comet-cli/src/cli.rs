@@ -23,9 +23,18 @@ pub enum Command {
     /// Generate or inspect Nebula migrations.
     #[command(subcommand)]
     Migrate(MigrateCommand),
+    /// Scaffold Comet Auth migrations and Cloudflare binding hints.
+    #[command(subcommand)]
+    Auth(AuthCommand),
     /// Run the project's test/release gate.
     #[command(subcommand)]
     Test(TestCommand),
+}
+
+#[derive(Subcommand)]
+pub enum AuthCommand {
+    /// Add the Comet Auth runtime migration to a project.
+    Init(AuthInitArgs),
 }
 
 #[derive(Args)]
@@ -116,6 +125,21 @@ pub struct MigrateStatusArgs {
     /// Project directory to inspect. Defaults to the current directory.
     #[arg(long)]
     pub path: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct AuthInitArgs {
+    /// Project directory. Defaults to the current directory.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+
+    /// Wrangler D1 binding used for durable auth tables.
+    #[arg(long, default_value = "DB")]
+    pub db_binding: String,
+
+    /// Wrangler KV binding used for OAuth state and optional session cache.
+    #[arg(long, default_value = "AUTH_KV")]
+    pub kv_binding: String,
 }
 
 #[derive(Subcommand)]

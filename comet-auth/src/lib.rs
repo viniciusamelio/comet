@@ -1,12 +1,14 @@
 mod config;
 mod cookie;
 mod error;
-mod oidc;
 mod oauth;
+mod oidc;
 mod routes;
 mod session;
 mod store;
 
+#[cfg(feature = "macros")]
+pub use comet_auth_macros::requires_auth;
 pub use config::{
     AppleProviderConfig, AuthConfig, CookieSameSite, GitHubProviderConfig, GoogleProviderConfig,
     ProviderConfig, providers,
