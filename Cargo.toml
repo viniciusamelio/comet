@@ -11,7 +11,7 @@ repository = "https://github.com/viniciusamelio/comet"
 exclude = ["vendor/rocket/core/lib/tests", "vendor/rocket/core/lib/benches"]
 
 [workspace]
-members = ["comet-auth"]
+members = ["comet-auth", "comet-auth-macros", "comet-cli"]
 resolver = "3"
 
 [features]

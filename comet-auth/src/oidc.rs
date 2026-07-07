@@ -2,14 +2,14 @@
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use crypto_bigint::BoxedUint;
+use rsa::RsaPublicKey;
 use rsa::pkcs1v15::{Signature as RsaSignature, VerifyingKey};
 use rsa::signature::Verifier;
-use rsa::RsaPublicKey;
 use serde::Deserialize;
 use sha2::Sha256;
 
-use crate::session;
 use crate::AuthError;
+use crate::session;
 
 const CLOCK_SKEW_SECONDS: i64 = 60;
 
@@ -144,7 +144,12 @@ fn decode_jwt_parts(jwt: &str) -> Result<(JwtHeader, OidcClaims, String, Vec<u8>
     let claims = decode_base64_json::<OidcClaims>(payload)?;
     let signature = Base64UrlUnpadded::decode_vec(signature)
         .map_err(|_| AuthError::InvalidIdentityToken("malformed JWT signature".into()))?;
-    Ok((header_value, claims, format!("{header}.{payload}"), signature))
+    Ok((
+        header_value,
+        claims,
+        format!("{header}.{payload}"),
+        signature,
+    ))
 }
 
 fn decode_base64_json<T: for<'de> Deserialize<'de>>(value: &str) -> Result<T, AuthError> {
@@ -206,7 +211,7 @@ pub fn validate_claims(
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_claims, Audience, OidcClaims, OidcValidation};
+    use super::{Audience, OidcClaims, OidcValidation, validate_claims};
 
     fn claims() -> OidcClaims {
         OidcClaims {

@@ -197,7 +197,9 @@ pub async fn oauth_callback(
         .await?
         .ok_or(AuthError::InvalidOAuthState)?;
 
-    if oauth_state.provider != provider.as_str() || oauth_state.expires_at <= session_core::now_unix() {
+    if oauth_state.provider != provider.as_str()
+        || oauth_state.expires_at <= session_core::now_unix()
+    {
         return Err(AuthError::InvalidOAuthState);
     }
 
@@ -266,7 +268,10 @@ pub async fn native_login(
         expires_at: issued.stored.expires_at,
     };
     let user = session.user.clone();
-    jar.add(build_session_cookie(&auth_state.config, issued.token.clone()));
+    jar.add(build_session_cookie(
+        &auth_state.config,
+        issued.token.clone(),
+    ));
 
     Ok(Json(NativeLoginResponse {
         token: issued.token,
@@ -391,7 +396,9 @@ async fn load_session(request: &Request<'_>) -> Result<Option<AuthSession>, Auth
     if let Ok(kv) = env.kv(state.kv_binding) {
         let ttl = stored.expires_at.saturating_sub(now) as u64;
         if ttl > 0 {
-            let _ = KvSessionCache::new(kv).put(&CachedSession::from(&stored), ttl).await;
+            let _ = KvSessionCache::new(kv)
+                .put(&CachedSession::from(&stored), ttl)
+                .await;
         }
     }
 
