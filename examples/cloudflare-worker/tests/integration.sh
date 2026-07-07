@@ -74,6 +74,9 @@ check "rbac auth demo route rejects anonymous visitor" "401" "$PRIVATE_ADMIN_STA
 GOOGLE_START_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/auth/google/start")
 check "configured auth provider route fails cleanly without local secrets" "400" "$GOOGLE_START_STATUS"
 
+OPEN_REDIRECT_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/auth/google/start?redirect_after=https://evil.test")
+check "auth start rejects external redirect_after" "400" "$OPEN_REDIRECT_STATUS"
+
 ECHO=$(curl -s -X POST "$BASE/echo" -d 'ping')
 check "echo route returns the request body" "ping" "$ECHO"
 

@@ -253,12 +253,17 @@ pub async fn native_login(
     if matches!(provider, OAuthProviderId::GitHub) {
         return Err(AuthError::UnsupportedProvider("github_native".into()));
     }
+    let nonce = login
+        .nonce
+        .as_deref()
+        .filter(|nonce| !nonce.trim().is_empty())
+        .ok_or(AuthError::MissingNonce)?;
     let identity = crate::oauth::validate_native_identity(
         &auth_state.config,
         env.inner(),
         provider,
         &login.id_token,
-        login.nonce.as_deref(),
+        Some(nonce),
     )
     .await?;
     let issued = issue_session(auth_state, env, identity).await?;
@@ -266,6 +271,7 @@ pub async fn native_login(
         id: issued.stored.id.clone(),
         user: issued.stored.user.clone().into(),
         expires_at: issued.stored.expires_at,
+        token_hash: issued.stored.token_hash.clone(),
     };
     let user = session.user.clone();
     jar.add(build_session_cookie(
@@ -301,6 +307,9 @@ pub async fn logout(
     if let Some(session) = session {
         let db = env.d1(state.db_binding)?;
         D1SessionStore::new(db).revoke_session(&session.id).await?;
+        if let Ok(kv) = env.kv(state.kv_binding) {
+            let _ = KvSessionCache::new(kv).delete(&session.token_hash).await;
+        }
     }
 
     jar.remove(remove_session_cookie(&state.config));
@@ -410,6 +419,7 @@ async fn load_session(request: &Request<'_>) -> Result<Option<AuthSession>, Auth
         id: stored.id,
         user: stored.user.into(),
         expires_at: stored.expires_at,
+        token_hash,
     }))
 }
 
@@ -474,6 +484,7 @@ fn auth_session_from_cached(cached: CachedSession) -> AuthSession {
         id: cached.id,
         user: cached.user,
         expires_at: cached.expires_at,
+        token_hash: cached.token_hash,
     }
 }
 

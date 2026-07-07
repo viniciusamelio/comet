@@ -27,6 +27,10 @@ pub enum AuthError {
     },
     #[error("invalid callback state")]
     InvalidOAuthState,
+    #[error("invalid post-login redirect path")]
+    InvalidRedirect,
+    #[error("native login nonce is required")]
+    MissingNonce,
     #[error("oauth provider request failed: {0}")]
     ProviderRequest(String),
     #[error("identity token is invalid: {0}")]
@@ -61,6 +65,8 @@ impl AuthError {
             | Self::ProviderNotConfigured(_)
             | Self::MissingProviderSetting { .. }
             | Self::InvalidOAuthState
+            | Self::InvalidRedirect
+            | Self::MissingNonce
             | Self::ProviderRequest(_)
             | Self::InvalidIdentityToken(_) => Status::BadRequest,
             _ => Status::InternalServerError,
@@ -78,6 +84,8 @@ impl AuthError {
             Self::ProviderNotConfigured(_) => "provider_not_configured",
             Self::MissingProviderSetting { .. } => "missing_provider_setting",
             Self::InvalidOAuthState => "invalid_oauth_state",
+            Self::InvalidRedirect => "invalid_redirect",
+            Self::MissingNonce => "missing_nonce",
             Self::ProviderRequest(_) => "provider_request",
             Self::InvalidIdentityToken(_) => "invalid_identity_token",
             Self::Random(_) => "random",

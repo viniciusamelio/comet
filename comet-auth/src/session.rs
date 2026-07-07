@@ -116,6 +116,8 @@ pub struct AuthSession {
     pub id: String,
     pub user: CurrentUser,
     pub expires_at: i64,
+    #[serde(skip)]
+    pub(crate) token_hash: String,
 }
 
 impl AuthSession {
