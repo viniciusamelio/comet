@@ -1,2 +1,3 @@
 /target
 /comet-cli/target
+**/target/
