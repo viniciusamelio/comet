@@ -1,0 +1,36 @@
+name: Example App
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  example-app:
+    name: examples/cloudflare-worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/cloudflare-worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: examples/cloudflare-worker
+
+      - name: native unit tests
+        run: cargo test --lib
+
+      - name: wasm32 build check
+        run: cargo check --target wasm32-unknown-unknown

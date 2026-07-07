@@ -1,0 +1,64 @@
+name: Core Tests
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  comet:
+    name: comet (native tests + wasm32 check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            comet-macros
+            comet-cli
+
+      - name: fmt check
+        run: |
+          cargo fmt --manifest-path Cargo.toml -- --check
+          cargo fmt --manifest-path comet-macros/Cargo.toml -- --check
+          cargo fmt --manifest-path comet-cli/Cargo.toml -- --check
+
+      - name: native-client tests
+        run: cargo test --features native-client
+
+      - name: cloudflare adapter tests
+        run: cargo test --no-default-features --features cloudflare
+
+      - name: nebula tests
+        run: cargo test --features nebula
+
+      - name: nebula-d1 tests
+        run: cargo test --features nebula-d1
+
+      - name: nebula-schema tests
+        run: cargo test --features nebula-schema
+
+      - name: comet-macros tests
+        run: cargo test --manifest-path comet-macros/Cargo.toml
+
+      - name: comet-cli tests
+        run: cargo test --manifest-path comet-cli/Cargo.toml
+
+      - name: wasm32 build check (full Cloudflare + Nebula feature set)
+        run: |
+          cargo check --no-default-features \
+            --features cloudflare,cloudflare-d1,cloudflare-queue,cloudflare-kv,cloudflare-r2,cloudflare-service,cloudflare-hyperdrive,cloudflare-websocket,nebula,nebula-d1 \
+            --target wasm32-unknown-unknown

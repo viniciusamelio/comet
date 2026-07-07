@@ -1,5 +1,9 @@
 # comet
 
+[![Core Tests](https://github.com/viniciusamelio/comet/actions/workflows/core.yml/badge.svg?branch=master)](https://github.com/viniciusamelio/comet/actions/workflows/core.yml)
+[![comet-cli E2E](https://github.com/viniciusamelio/comet/actions/workflows/cli-e2e.yml/badge.svg?branch=master)](https://github.com/viniciusamelio/comet/actions/workflows/cli-e2e.yml)
+[![Example App](https://github.com/viniciusamelio/comet/actions/workflows/example-app.yml/badge.svg?branch=master)](https://github.com/viniciusamelio/comet/actions/workflows/example-app.yml)
+
 Run [Rocket](https://rocket.rs) routes on Cloudflare Workers.
 
 📖 Full documentation: [comet.physikos.app](https://comet.physikos.app)
