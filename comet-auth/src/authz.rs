@@ -8,9 +8,17 @@ use crate::{AuthError, AuthSession};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuthorizationRequirement {
+    pub mode: AuthorizationMode,
     pub roles: &'static [&'static str],
     pub permissions: &'static [&'static str],
     pub scopes: &'static [&'static str],
+    pub resource: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorizationMode {
+    All,
+    Any,
 }
 
 impl AuthorizationRequirement {
@@ -19,10 +27,22 @@ impl AuthorizationRequirement {
         permissions: &'static [&'static str],
         scopes: &'static [&'static str],
     ) -> Self {
+        Self::with_mode_and_resource(AuthorizationMode::All, roles, permissions, scopes, None)
+    }
+
+    pub const fn with_mode_and_resource(
+        mode: AuthorizationMode,
+        roles: &'static [&'static str],
+        permissions: &'static [&'static str],
+        scopes: &'static [&'static str],
+        resource: Option<&'static str>,
+    ) -> Self {
         Self {
+            mode,
             roles,
             permissions,
             scopes,
+            resource,
         }
     }
 
@@ -51,15 +71,25 @@ impl AuthorizationClaims {
     }
 
     pub fn satisfies(&self, requirement: &AuthorizationRequirement) -> bool {
-        requirement.roles.iter().all(|role| self.has_role(role))
-            && requirement
-                .permissions
-                .iter()
-                .all(|permission| self.has_permission(permission))
-            && requirement
-                .scopes
-                .iter()
-                .all(|scope| self.has_permission(scope))
+        if requirement.is_empty() {
+            return true;
+        }
+
+        let role_matches = requirement.roles.iter().map(|role| self.has_role(role));
+        let permission_matches = requirement
+            .permissions
+            .iter()
+            .map(|permission| self.has_permission(permission));
+        let scope_matches = requirement
+            .scopes
+            .iter()
+            .map(|scope| self.has_permission(scope));
+        let mut matches = role_matches.chain(permission_matches).chain(scope_matches);
+
+        match requirement.mode {
+            AuthorizationMode::All => matches.all(|matched| matched),
+            AuthorizationMode::Any => matches.any(|matched| matched),
+        }
     }
 }
 
@@ -141,10 +171,38 @@ where
         .rocket()
         .state::<worker::Env>()
         .ok_or(AuthError::MissingEnv)?;
-    let db = env.d1(state.db_binding)?;
-    let claims = D1AuthorizationStore::new(db)
-        .claims_for_user(&session.user.id)
-        .await?;
+    let resource = P::REQUIREMENT.resource.unwrap_or("");
+    let cache_key = claims_cache_key(&session.user.id, resource);
+    let claims = if state.config.authorization_claims_cache_ttl_seconds > 0 {
+        if let Ok(kv) = env.kv(state.kv_binding) {
+            if let Some(claims) = load_claims_from_cache(&kv, &cache_key).await? {
+                claims
+            } else {
+                let db = env.d1(state.db_binding)?;
+                let claims = D1AuthorizationStore::new(db)
+                    .claims_for_user(&session.user.id, P::REQUIREMENT.resource)
+                    .await?;
+                cache_claims(
+                    &kv,
+                    &cache_key,
+                    &claims,
+                    state.config.authorization_claims_cache_ttl_seconds,
+                )
+                .await?;
+                claims
+            }
+        } else {
+            let db = env.d1(state.db_binding)?;
+            D1AuthorizationStore::new(db)
+                .claims_for_user(&session.user.id, P::REQUIREMENT.resource)
+                .await?
+        }
+    } else {
+        let db = env.d1(state.db_binding)?;
+        D1AuthorizationStore::new(db)
+            .claims_for_user(&session.user.id, P::REQUIREMENT.resource)
+            .await?
+    };
 
     if claims.satisfies(&P::REQUIREMENT) {
         Ok(AuthorizedSession::new(session, claims))
@@ -175,7 +233,11 @@ impl D1AuthorizationStore {
         Self { db }
     }
 
-    pub async fn claims_for_user(&self, user_id: &str) -> Result<AuthorizationClaims, AuthError> {
+    pub async fn claims_for_user(
+        &self,
+        user_id: &str,
+        resource: Option<&str>,
+    ) -> Result<AuthorizationClaims, AuthError> {
         #[derive(Debug, Deserialize)]
         struct ClaimRow {
             name: String,
@@ -186,10 +248,10 @@ impl D1AuthorizationStore {
             .prepare(
                 "SELECT role_name AS name \
                  FROM comet_auth_user_roles \
-                 WHERE user_id = ?1 AND resource = '' \
+                 WHERE user_id = ?1 AND (resource = '' OR resource = ?2) \
                  ORDER BY role_name",
             )
-            .bind(&[js(user_id)])?
+            .bind(&[js(user_id), js(resource.unwrap_or(""))])?
             .all()
             .await?
             .results::<ClaimRow>()?;
@@ -199,15 +261,17 @@ impl D1AuthorizationStore {
             .prepare(
                 "SELECT permission_name AS name \
                  FROM comet_auth_user_permissions \
-                 WHERE user_id = ?1 AND resource = '' \
+                 WHERE user_id = ?1 AND (resource = '' OR resource = ?2) \
                  UNION \
                  SELECT rp.permission_name AS name \
                  FROM comet_auth_user_roles ur \
                  JOIN comet_auth_role_permissions rp ON rp.role_name = ur.role_name \
-                 WHERE ur.user_id = ?1 AND ur.resource = '' AND rp.resource = '' \
+                 WHERE ur.user_id = ?1 \
+                    AND (ur.resource = '' OR ur.resource = ?2) \
+                    AND (rp.resource = '' OR rp.resource = ?2) \
                  ORDER BY name",
             )
-            .bind(&[js(user_id)])?
+            .bind(&[js(user_id), js(resource.unwrap_or(""))])?
             .all()
             .await?
             .results::<ClaimRow>()?;
@@ -217,6 +281,36 @@ impl D1AuthorizationStore {
             permissions: permission_rows.into_iter().map(|row| row.name).collect(),
         })
     }
+}
+
+#[cfg(feature = "cloudflare")]
+async fn load_claims_from_cache(
+    kv: &worker::kv::KvStore,
+    key: &str,
+) -> Result<Option<AuthorizationClaims>, AuthError> {
+    let Some(value) = kv.get(key).text().await? else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::from_str(&value)?))
+}
+
+#[cfg(feature = "cloudflare")]
+async fn cache_claims(
+    kv: &worker::kv::KvStore,
+    key: &str,
+    claims: &AuthorizationClaims,
+    ttl_seconds: u64,
+) -> Result<(), AuthError> {
+    kv.put(key, serde_json::to_string(claims)?)?
+        .expiration_ttl(ttl_seconds)
+        .execute()
+        .await?;
+    Ok(())
+}
+
+#[cfg(feature = "cloudflare")]
+fn claims_cache_key(user_id: &str, resource: &str) -> String {
+    format!("authz:{user_id}:{resource}")
 }
 
 #[cfg(not(feature = "cloudflare"))]
@@ -230,7 +324,7 @@ fn js(value: impl Into<worker::wasm_bindgen::JsValue>) -> worker::wasm_bindgen::
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthorizationClaims, AuthorizationRequirement};
+    use super::{AuthorizationClaims, AuthorizationMode, AuthorizationRequirement};
 
     #[test]
     fn scopes_are_permissions_for_enforcement() {
@@ -252,5 +346,22 @@ mod tests {
         let requirement = AuthorizationRequirement::new(&["admin"], &[], &[]);
 
         assert!(!claims.satisfies(&requirement));
+    }
+
+    #[test]
+    fn any_mode_allows_one_matching_claim() {
+        let claims = AuthorizationClaims {
+            roles: vec!["member".to_owned()],
+            permissions: vec!["boards:read".to_owned()],
+        };
+        let requirement = AuthorizationRequirement::with_mode_and_resource(
+            AuthorizationMode::Any,
+            &["admin"],
+            &["boards:read"],
+            &[],
+            None,
+        );
+
+        assert!(claims.satisfies(&requirement));
     }
 }

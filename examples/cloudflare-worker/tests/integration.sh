@@ -71,6 +71,9 @@ check "protected auth demo route rejects anonymous visitor" "401" "$PRIVATE_STAT
 PRIVATE_ADMIN_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/private/admin")
 check "rbac auth demo route rejects anonymous visitor" "401" "$PRIVATE_ADMIN_STATUS"
 
+PRIVATE_REVIEWER_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/private/reviewer")
+check "resource any-rbac demo route rejects anonymous visitor" "401" "$PRIVATE_REVIEWER_STATUS"
+
 GOOGLE_START_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/auth/google/start")
 check "configured auth provider route fails cleanly without local secrets" "400" "$GOOGLE_START_STATUS"
 

@@ -66,6 +66,7 @@ booleano" mencionada em [Nebula ORM](/pt-BR/docs/nebula-orm).
 | `POST /auth/logout` | revoga a sessão atual |
 | `GET /private/me` | rota protegida com `#[comet_auth::requires_auth]` |
 | `GET /private/admin` | rota RBAC com `#[comet_auth::requires_auth(role = "admin")]` |
+| `GET /private/reviewer` | rota RBAC com `any(...)` e `resource = "demo"` |
 | `GET /tasks`, `GET /tasks/<id>` | listar/buscar tarefas |
 | `POST /tasks` | criar tarefa (publica evento na queue) |
 | `POST /tasks/<id>/complete` | concluir tarefa (publica evento na queue) |
@@ -198,8 +199,8 @@ pub async fn private_me(session: comet_auth::AuthSession) -> Json<PrivateMeRespo
 }
 ```
 
-As rotas públicas continuam públicas. Sem sessão, `/private/me` e
-`/private/admin` respondem `401 Unauthorized`, enquanto `/auth/session`
+As rotas públicas continuam públicas. Sem sessão, `/private/me`,
+`/private/admin` e `/private/reviewer` respondem `401 Unauthorized`, enquanto `/auth/session`
 retorna `authenticated: false`. Com sessão válida mas sem role/permissão, uma
 rota RBAC responde `403 Forbidden`.
 

@@ -26,11 +26,17 @@ async fn rbac() -> &'static str {
     "rbac"
 }
 
+#[comet_auth::requires_auth(any(role = "admin", permission = "boards:read"), resource = "org:demo")]
+#[rocket::get("/rbac-any")]
+async fn rbac_any() -> &'static str {
+    "rbac-any"
+}
+
 #[rocket::async_test]
 async fn injected_required_guard_rejects_anonymous_requests() {
     let rocket = rocket::build()
         .attach(Auth::<(), ()>::fairing(AuthConfig::default()))
-        .mount("/", rocket::routes![protected, admin, rbac]);
+        .mount("/", rocket::routes![protected, admin, rbac, rbac_any]);
     let client = Client::tracked(rocket).await.unwrap();
 
     assert_eq!(
@@ -43,6 +49,10 @@ async fn injected_required_guard_rejects_anonymous_requests() {
     );
     assert_eq!(
         client.get("/rbac").dispatch().await.status(),
+        Status::Unauthorized
+    );
+    assert_eq!(
+        client.get("/rbac-any").dispatch().await.status(),
         Status::Unauthorized
     );
 }

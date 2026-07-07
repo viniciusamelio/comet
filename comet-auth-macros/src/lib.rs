@@ -4,7 +4,8 @@ use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{FnArg, Ident, ItemFn, LitStr, Pat, Result, Token, Type, parse_macro_input, parse_quote};
+use syn::{FnArg, Ident, ItemFn, LitStr, Pat, Result, Token, Type, parenthesized};
+use syn::{parse_macro_input, parse_quote};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GuardKind {
@@ -13,25 +14,93 @@ enum GuardKind {
     Authorized,
 }
 
-#[derive(Debug, Default)]
-struct RequiresAuthArgs {
-    optional: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PolicyMode {
+    All,
+    Any,
+}
+
+#[derive(Debug)]
+struct PolicyGroup {
+    mode: PolicyMode,
     roles: Vec<LitStr>,
     permissions: Vec<LitStr>,
     scopes: Vec<LitStr>,
 }
 
+impl PolicyGroup {
+    fn all() -> Self {
+        Self {
+            mode: PolicyMode::All,
+            roles: Vec::new(),
+            permissions: Vec::new(),
+            scopes: Vec::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.roles.is_empty() && self.permissions.is_empty() && self.scopes.is_empty()
+    }
+
+    fn push(&mut self, claim: ClaimArg) {
+        match claim {
+            ClaimArg::Role(value) => self.roles.push(value),
+            ClaimArg::Permission(value) => self.permissions.push(value),
+            ClaimArg::Scope(value) => self.scopes.push(value),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RequiresAuthArgs {
+    optional: bool,
+    resource: Option<LitStr>,
+    group: PolicyGroup,
+}
+
+impl Default for RequiresAuthArgs {
+    fn default() -> Self {
+        Self {
+            optional: false,
+            resource: None,
+            group: PolicyGroup::all(),
+        }
+    }
+}
+
 impl RequiresAuthArgs {
     fn has_authorization_policy(&self) -> bool {
-        !self.roles.is_empty() || !self.permissions.is_empty() || !self.scopes.is_empty()
+        !self.group.is_empty()
     }
 }
 
 enum RequiresAuthArg {
     Optional,
+    Resource(LitStr),
+    Claim(ClaimArg),
+    Group(PolicyGroup),
+}
+
+enum ClaimArg {
     Role(LitStr),
     Permission(LitStr),
     Scope(LitStr),
+}
+
+impl Parse for ClaimArg {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let name: Ident = input.parse()?;
+        input.parse::<Token![=]>()?;
+        match name.to_string().as_str() {
+            "role" => Ok(Self::Role(input.parse()?)),
+            "permission" => Ok(Self::Permission(input.parse()?)),
+            "scope" => Ok(Self::Scope(input.parse()?)),
+            other => Err(syn::Error::new(
+                name.span(),
+                format!("unsupported authorization claim `{other}`"),
+            )),
+        }
+    }
 }
 
 impl Parse for RequiresAuthArg {
@@ -39,17 +108,40 @@ impl Parse for RequiresAuthArg {
         let name: Ident = input.parse()?;
         match name.to_string().as_str() {
             "optional" => Ok(Self::Optional),
-            "role" => {
+            "resource" => {
                 input.parse::<Token![=]>()?;
-                Ok(Self::Role(input.parse()?))
+                Ok(Self::Resource(input.parse()?))
             }
-            "permission" => {
+            "role" | "permission" | "scope" => {
                 input.parse::<Token![=]>()?;
-                Ok(Self::Permission(input.parse()?))
+                let value: LitStr = input.parse()?;
+                let claim = match name.to_string().as_str() {
+                    "role" => ClaimArg::Role(value),
+                    "permission" => ClaimArg::Permission(value),
+                    "scope" => ClaimArg::Scope(value),
+                    _ => unreachable!(),
+                };
+                Ok(Self::Claim(claim))
             }
-            "scope" => {
-                input.parse::<Token![=]>()?;
-                Ok(Self::Scope(input.parse()?))
+            "any" | "all" => {
+                let mode = if name == "any" {
+                    PolicyMode::Any
+                } else {
+                    PolicyMode::All
+                };
+                let content;
+                parenthesized!(content in input);
+                let claims = Punctuated::<ClaimArg, Token![,]>::parse_terminated(&content)?;
+                let mut group = PolicyGroup {
+                    mode,
+                    roles: Vec::new(),
+                    permissions: Vec::new(),
+                    scopes: Vec::new(),
+                };
+                for claim in claims {
+                    group.push(claim);
+                }
+                Ok(Self::Group(group))
             }
             other => Err(syn::Error::new(
                 name.span(),
@@ -66,13 +158,38 @@ impl Parse for RequiresAuthArgs {
         }
 
         let mut args = Self::default();
+        let mut saw_group = false;
         let parsed = Punctuated::<RequiresAuthArg, Token![,]>::parse_terminated(input)?;
         for arg in parsed {
             match arg {
                 RequiresAuthArg::Optional => args.optional = true,
-                RequiresAuthArg::Role(role) => args.roles.push(role),
-                RequiresAuthArg::Permission(permission) => args.permissions.push(permission),
-                RequiresAuthArg::Scope(scope) => args.scopes.push(scope),
+                RequiresAuthArg::Resource(resource) => {
+                    if args.resource.replace(resource).is_some() {
+                        return Err(syn::Error::new(
+                            Span::call_site(),
+                            "`resource` can only be declared once",
+                        ));
+                    }
+                }
+                RequiresAuthArg::Claim(claim) => {
+                    if saw_group {
+                        return Err(syn::Error::new(
+                            Span::call_site(),
+                            "top-level claims cannot be combined with any(...)/all(...)",
+                        ));
+                    }
+                    args.group.push(claim);
+                }
+                RequiresAuthArg::Group(group) => {
+                    if saw_group || !args.group.is_empty() {
+                        return Err(syn::Error::new(
+                            Span::call_site(),
+                            "only one any(...), all(...), or top-level claim group is supported",
+                        ));
+                    }
+                    args.group = group;
+                    saw_group = true;
+                }
             }
         }
 
@@ -80,6 +197,13 @@ impl Parse for RequiresAuthArgs {
             return Err(syn::Error::new(
                 Span::call_site(),
                 "`optional` cannot be combined with authorization policies",
+            ));
+        }
+
+        if args.resource.is_some() && !args.has_authorization_policy() {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                "`resource` requires role, permission, scope, any(...), or all(...)",
             ));
         }
 
@@ -152,9 +276,17 @@ fn expand_requires_auth(
 
     let policy = if args.has_authorization_policy() {
         let policy_ident = format_ident!("__CometAuthPolicyFor{}", item.sig.ident);
-        let roles = args.roles;
-        let permissions = args.permissions;
-        let scopes = args.scopes;
+        let mode = match args.group.mode {
+            PolicyMode::All => quote!(::comet_auth::AuthorizationMode::All),
+            PolicyMode::Any => quote!(::comet_auth::AuthorizationMode::Any),
+        };
+        let roles = args.group.roles;
+        let permissions = args.group.permissions;
+        let scopes = args.group.scopes;
+        let resource = match args.resource {
+            Some(resource) => quote!(Some(#resource)),
+            None => quote!(None),
+        };
         item.sig
             .inputs
             .insert(0, authorized_session_arg(&policy_ident));
@@ -165,10 +297,12 @@ fn expand_requires_auth(
 
             impl ::comet_auth::RequiredAuthorization for #policy_ident {
                 const REQUIREMENT: ::comet_auth::AuthorizationRequirement =
-                    ::comet_auth::AuthorizationRequirement::new(
+                    ::comet_auth::AuthorizationRequirement::with_mode_and_resource(
+                        #mode,
                         &[#(#roles),*],
                         &[#(#permissions),*],
                         &[#(#scopes),*],
+                        #resource,
                     );
             }
         }
