@@ -62,6 +62,15 @@ check() {
 INDEX=$(curl -s "$BASE/")
 check "index route returns greeting" "hello from Rocket on Cloudflare Workers" "$INDEX"
 
+AUTH_SESSION=$(curl -s "$BASE/auth/session")
+check "auth session route reports anonymous visitor" "false" "$(echo "$AUTH_SESSION" | jq -r .authenticated)"
+
+PRIVATE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/private/me")
+check "protected auth demo route rejects anonymous visitor" "401" "$PRIVATE_STATUS"
+
+GOOGLE_START_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/auth/google/start")
+check "configured auth provider route fails cleanly without local secrets" "400" "$GOOGLE_START_STATUS"
+
 ECHO=$(curl -s -X POST "$BASE/echo" -d 'ping')
 check "echo route returns the request body" "ping" "$ECHO"
 

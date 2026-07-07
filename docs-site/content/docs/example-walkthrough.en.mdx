@@ -1,12 +1,12 @@
 ---
 title: Full example
-description: A walkthrough of examples/cloudflare-worker — D1, Queues, R2, and WebSocket together.
+description: A walkthrough of examples/cloudflare-worker — D1, Queues, R2, WebSocket, and auth together.
 ---
 
 The repository ships a complete example at `examples/cloudflare-worker`: a
 task API with D1, asynchronous Queue calls, R2 object streaming, a
-WebSocket echo endpoint, and end-to-end unit + integration tests. This page
-walks through the main pieces.
+WebSocket echo endpoint, `comet-auth` mounted in the same Worker, and
+end-to-end unit + integration tests. This page walks through the main pieces.
 
 ## Project layout
 
@@ -15,13 +15,14 @@ examples/cloudflare-worker/
   src/
     lib.rs          # pub mod app; assets; demo (private); boards; orgs; tasks; users (public)
     entry.rs         # wasm-only glue: #[event(fetch)] and #[event(queue)]
-    app.rs           # builds the Rocket, body limits, .manage(env)
+    app.rs           # builds the Rocket, body limits, auth, .manage(env)
     tasks/           # the D1-backed task API (the example's focus)
     assets/          # R2 upload/download routes
-    demo/            # /, /echo, /stream, /ws/echo — streaming and WebSocket proofs
+    demo/            # /, /echo, /stream, /ws/echo, /private/me
     boards/ orgs/ users/  # extra Nebula entities, for relationships
   migrations/
     0001_init.sql
+    0002_comet_auth.sql
   tests/
     integration.sh
     perf.sh
@@ -58,6 +59,11 @@ mentioned in [Nebula ORM](/en/docs/nebula-orm).
 | `POST /echo` | streamed body echo |
 | `GET /stream` | 3 chunks with real 400ms pauses (streaming proof) |
 | `GET /ws/echo` | WebSocket echo |
+| `GET /auth/session` | current session state |
+| `GET /auth/<provider>/start` | starts Google, Apple, or GitHub OAuth |
+| `POST /auth/native/google`, `POST /auth/native/apple` | native login by identity token |
+| `POST /auth/logout` | revokes the current session |
+| `GET /private/me` | protected route with `#[comet_auth::requires_auth]` |
 | `GET /tasks`, `GET /tasks/<id>` | list/fetch tasks |
 | `POST /tasks` | create a task (publishes an event to the queue) |
 | `POST /tasks/<id>/complete` | complete a task (publishes an event to the queue) |
@@ -164,6 +170,35 @@ pub async fn websocket_echo(ws: WebSocketUpgrade) -> WebSocketResponse {
 }
 ```
 
+## Auth: session and protected route
+
+`src/app.rs` mounts auth routes in the same Rocket:
+
+```rust
+rocket::custom(config)
+    .manage(env)
+    .attach(comet_auth::Auth::<DB, AuthKv>::fairing(auth_config))
+    .mount("/auth", comet_auth::routes::<DB, AuthKv>())
+    .mount("/", routes![index, private_me /* ... */])
+```
+
+And `src/demo/routes.rs` shows the expected ergonomics for protected handlers:
+
+```rust
+#[comet_auth::requires_auth]
+#[get("/private/me")]
+pub async fn private_me(session: comet_auth::AuthSession) -> Json<PrivateMeResponse> {
+    Json(PrivateMeResponse {
+        session_id: session.id,
+        user_id: session.user.id,
+        email: session.user.primary_email,
+    })
+}
+```
+
+Public routes stay public. Without a session, `/private/me` returns
+`401 Unauthorized`, while `/auth/session` returns `authenticated: false`.
+
 ## Configuring `wrangler.jsonc`
 
 ```jsonc
@@ -177,6 +212,7 @@ pub async fn websocket_echo(ws: WebSocketUpgrade) -> WebSocketResponse {
     "database_id": "00000000-0000-0000-0000-000000000000",
     "migrations_dir": "migrations"
   }],
+  "kv_namespaces": [{ "binding": "AUTH_KV", "id": "00000000000000000000000000000000" }],
   "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "comet-cloudflare-worker-example-assets" }],
   "queues": {
     "producers": [{ "binding": "TASK_EVENTS", "queue": "task-events" }],
@@ -185,12 +221,15 @@ pub async fn websocket_echo(ws: WebSocketUpgrade) -> WebSocketResponse {
 }
 ```
 
-The binding names (`DB`, `ASSETS`, `TASK_EVENTS`) need to match the
+The binding names (`DB`, `AUTH_KV`, `ASSETS`, `TASK_EVENTS`) need to match the
 `BindingName::NAME` constants defined in the Rust code:
 
 ```rust
 pub struct DB;
 impl BindingName for DB { const NAME: &'static str = "DB"; }
+
+pub struct AuthKv;
+impl BindingName for AuthKv { const NAME: &'static str = "AUTH_KV"; }
 
 pub struct Assets;
 impl BindingName for Assets { const NAME: &'static str = "ASSETS"; }
@@ -203,9 +242,10 @@ impl BindingName for TaskEvents { const NAME: &'static str = "TASK_EVENTS"; }
 
 ```sh
 npx wrangler d1 create comet-cloudflare-worker-example
+npx wrangler kv namespace create AUTH_KV
 npx wrangler queues create task-events
 npx wrangler r2 bucket create comet-cloudflare-worker-example-assets
-# paste the database_id into wrangler.jsonc, in d1_databases[0]
+# paste the database_id and KV id into wrangler.jsonc
 npx wrangler d1 migrations apply DB --local     # for wrangler dev
 npx wrangler d1 migrations apply DB --remote    # for wrangler deploy
 

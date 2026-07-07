@@ -19,6 +19,12 @@
       "migrations_dir": "migrations"
     }
   ],
+  "kv_namespaces": [
+    {
+      "binding": "AUTH_KV",
+      "id": "00000000000000000000000000000000"
+    }
+  ],
   "r2_buckets": [
     {
       "binding": "ASSETS",

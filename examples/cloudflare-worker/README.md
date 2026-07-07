@@ -3,12 +3,14 @@
 This example is a small but real Rust Cloudflare Worker built with Rocket
 routes through `comet`. It's a task tracker backed by D1, with task lifecycle
 changes published to a Queue and consumed asynchronously. It also exercises R2
-object streaming and a Worker WebSocket route.
+object streaming, a Worker WebSocket route, and `comet-auth` mounted on the
+same Rocket app.
 
 It depends on `comet` with `default-features = false` and the Cloudflare
 features needed by the example (`cloudflare`, D1, Queue, R2, and WebSocket), so
 it can compile to `wasm32-unknown-unknown` without pulling Rocket's native
-local client. The Worker entrypoint calls:
+local client. `comet-auth` is included with `default-features = false` and the
+`cloudflare`/`macros` features. The Worker entrypoint calls:
 
 ```rust
 comet::cloudflare::fetch(req, env, ctx, rocket).await
@@ -33,6 +35,8 @@ comet::cloudflare::fetch(req, env, ctx, rocket).await
   validation errors into proper JSON error responses with the right HTTP
   status.
 - `migrations/0001_init.sql` — the `tasks` and `task_events` schema.
+- `migrations/0002_comet_auth.sql` — the auth schema for users, linked
+  provider accounts, and sessions.
 
 ### Routes
 
@@ -42,6 +46,15 @@ comet::cloudflare::fetch(req, env, ctx, rocket).await
   and a multi-megabyte one.
 - `GET /stream` — 3 chunks, a real (`worker::Delay`) 400ms gap between each.
   Exists purely to prove response streaming isn't buffered — see Tests below.
+- `GET /auth/session` — current auth state. Anonymous visitors get
+  `{"authenticated":false,...}`.
+- `GET /auth/<provider>/start` — starts Google, Apple, or GitHub OAuth when
+  the corresponding provider secrets are configured.
+- `GET /auth/<provider>/callback` — OAuth callback endpoint.
+- `POST /auth/native/google` and `POST /auth/native/apple` — exchange native
+  identity tokens for a Comet session.
+- `POST /auth/logout` — revoke the current session.
+- `GET /private/me` — protected route using `#[comet_auth::requires_auth]`.
 - `GET /tasks` — list all tasks.
 - `POST /tasks` — create a task from a JSON body (`{"title": "..."}`) and
   publish a `created` event to the queue.
@@ -124,17 +137,20 @@ calling `comet::cloudflare::fetch(req, env, ctx, rocket).await`.
 
 ## Setup
 
-Create a D1 database and a queue, and wire them into `wrangler.jsonc`:
+Create a D1 database, KV namespace, queue, and R2 bucket, and wire them into
+`wrangler.jsonc`:
 
 ```sh
 npx wrangler d1 create comet-cloudflare-worker-example
+npx wrangler kv namespace create AUTH_KV
 npx wrangler queues create task-events
 npx wrangler r2 bucket create comet-cloudflare-worker-example-assets
 ```
 
 Copy the `database_id` from the first command's output into the
-`d1_databases[0].database_id` field in `wrangler.jsonc` (it currently has a
-placeholder). Then apply migrations:
+`d1_databases[0].database_id` field in `wrangler.jsonc` and the KV namespace
+`id` into `kv_namespaces[0].id` (both currently have placeholders). Then apply
+migrations:
 
 ```sh
 # local (used by `wrangler dev`)
@@ -143,6 +159,21 @@ npx wrangler d1 migrations apply DB --local
 # remote (used by `wrangler deploy`)
 npx wrangler d1 migrations apply DB --remote
 ```
+
+For local development, set the public callback base URL and a token pepper:
+
+```sh
+npx wrangler secret put COMET_AUTH_TOKEN_PEPPER
+npx wrangler secret put COMET_AUTH_BASE_URL
+```
+
+Use `http://localhost:8787` for `COMET_AUTH_BASE_URL` when running
+`npm run dev`. For OAuth providers, configure the provider-specific secrets
+from [`../../docs/auth.md`](../../docs/auth.md). The redirect URIs are:
+
+- Google: `<COMET_AUTH_BASE_URL>/auth/google/callback`
+- Apple: `<COMET_AUTH_BASE_URL>/auth/apple/callback`
+- GitHub: `<COMET_AUTH_BASE_URL>/auth/github/callback`
 
 ## Run Locally
 
@@ -164,6 +195,9 @@ curl -X POST http://localhost:8787/tasks \
 
 curl http://localhost:8787/tasks
 curl -X POST http://localhost:8787/tasks/1/complete
+
+curl http://localhost:8787/auth/session
+curl -i http://localhost:8787/private/me
 
 curl -X PUT http://localhost:8787/assets/hello.txt --data-binary 'hello from R2'
 curl http://localhost:8787/assets/hello.txt
@@ -196,7 +230,9 @@ npm run test
 
 `tests/integration.sh` drives a real `wrangler dev` instance end to end: it
 resets local D1 state, applies migrations, starts the worker, exercises every
-route over HTTP, confirms the queue consumer actually wrote the
+public route over HTTP, verifies `/auth/session`, verifies that `/private/me`
+returns `401` without a session, confirms provider startup fails cleanly when
+local OAuth secrets are absent, confirms the queue consumer actually wrote the
 `task_events` audit trail, round-trips a 1MiB object through R2, verifies the
 `/ws/echo` WebSocket route, and proves request/response bodies are
 genuinely streamed rather than buffered — a 1MiB `/echo` body round-trips

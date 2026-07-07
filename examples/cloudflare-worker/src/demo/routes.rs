@@ -1,10 +1,31 @@
 use comet::cloudflare::{WebSocketResponse, WebSocketUpgrade};
+use comet_auth::AuthSession;
 use rocket::futures::StreamExt;
+use rocket::serde::json::Json;
+use rocket::serde::Serialize;
 use worker::WebsocketEvent;
 
 #[get("/")]
 pub fn index() -> &'static str {
     "hello from Rocket on Cloudflare Workers\n"
+}
+
+#[derive(Debug, Serialize)]
+#[serde(crate = "rocket::serde")]
+pub struct PrivateMeResponse {
+    pub session_id: String,
+    pub user_id: String,
+    pub email: Option<String>,
+}
+
+#[comet_auth::requires_auth]
+#[get("/private/me")]
+pub async fn private_me(session: AuthSession) -> Json<PrivateMeResponse> {
+    Json(PrivateMeResponse {
+        session_id: session.id,
+        user_id: session.user.id,
+        email: session.user.primary_email,
+    })
 }
 
 #[post("/echo", data = "<body>")]
