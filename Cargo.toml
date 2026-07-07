@@ -10,6 +10,10 @@ categories = ["web-programming::http-server", "wasm"]
 repository = "https://github.com/viniciusamelio/comet"
 exclude = ["vendor/rocket/core/lib/tests", "vendor/rocket/core/lib/benches"]
 
+[workspace]
+members = ["comet-auth"]
+resolver = "3"
+
 [features]
 default = ["native-client"]
 cloudflare = ["dep:rocket", "dep:worker", "dep:send_wrapper", "dep:async-stream", "dep:futures-channel"]
