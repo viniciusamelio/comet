@@ -31,7 +31,7 @@ Your Worker needs one D1 binding and one KV namespace:
 Add the auth migration with:
 
 ```sh
-comet auth init --db-binding DB --kv-binding AUTH_KV
+comet auth init --db-binding DB --kv-binding AUTH_KV --with-rbac
 ```
 
 ## Rocket Mount
@@ -97,8 +97,31 @@ async fn maybe(session: comet_auth::OptionalAuthSession) -> &'static str {
 }
 ```
 
-`scope = "..."` is accepted today and behaves as required authentication.
-RBAC enforcement is planned for phase 7.
+Authorization policies are enforced with D1-backed RBAC:
+
+```rust
+#[comet_auth::requires_auth(role = "admin")]
+#[rocket::get("/admin")]
+async fn admin() -> &'static str {
+    "admin"
+}
+
+#[comet_auth::requires_auth(permission = "boards:write")]
+#[rocket::post("/boards")]
+async fn create_board() -> &'static str {
+    "created"
+}
+```
+
+`scope = "..."` is treated as a permission alias. Missing sessions return
+`401 Unauthorized`; authenticated sessions without the required role,
+permission, or scope return `403 Forbidden`.
+
+Add RBAC tables when initializing auth:
+
+```sh
+comet auth init --with-rbac
+```
 
 ## Provider Secrets
 

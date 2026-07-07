@@ -1,3 +1,4 @@
+mod authz;
 mod config;
 mod cookie;
 mod error;
@@ -28,3 +29,7 @@ pub use store::{
 
 pub const DEFAULT_SESSION_COOKIE: &str = "__Host-comet_session";
 pub const DEFAULT_SESSION_TTL_SECONDS: u64 = 60 * 60 * 24 * 30;
+pub use authz::{
+    AuthorizationClaims, AuthorizationRequirement, AuthorizedSession, D1AuthorizationStore,
+    RequiredAuthorization,
+};

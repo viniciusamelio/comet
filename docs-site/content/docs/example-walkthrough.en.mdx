@@ -64,6 +64,7 @@ mentioned in [Nebula ORM](/en/docs/nebula-orm).
 | `POST /auth/native/google`, `POST /auth/native/apple` | native login by identity token |
 | `POST /auth/logout` | revokes the current session |
 | `GET /private/me` | protected route with `#[comet_auth::requires_auth]` |
+| `GET /private/admin` | RBAC route with `#[comet_auth::requires_auth(role = "admin")]` |
 | `GET /tasks`, `GET /tasks/<id>` | list/fetch tasks |
 | `POST /tasks` | create a task (publishes an event to the queue) |
 | `POST /tasks/<id>/complete` | complete a task (publishes an event to the queue) |
@@ -196,8 +197,10 @@ pub async fn private_me(session: comet_auth::AuthSession) -> Json<PrivateMeRespo
 }
 ```
 
-Public routes stay public. Without a session, `/private/me` returns
-`401 Unauthorized`, while `/auth/session` returns `authenticated: false`.
+Public routes stay public. Without a session, `/private/me` and
+`/private/admin` return `401 Unauthorized`, while `/auth/session` returns
+`authenticated: false`. With a valid session but without the required role or
+permission, an RBAC route returns `403 Forbidden`.
 
 ## Configuring `wrangler.jsonc`
 

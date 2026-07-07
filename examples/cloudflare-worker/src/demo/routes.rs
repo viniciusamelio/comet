@@ -28,6 +28,12 @@ pub async fn private_me(session: AuthSession) -> Json<PrivateMeResponse> {
     })
 }
 
+#[comet_auth::requires_auth(role = "admin")]
+#[get("/private/admin")]
+pub async fn private_admin() -> &'static str {
+    "admin\n"
+}
+
 #[post("/echo", data = "<body>")]
 pub fn echo(body: String) -> String {
     body

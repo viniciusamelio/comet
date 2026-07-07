@@ -7,6 +7,8 @@ use crate::cli::AuthInitArgs;
 use crate::snapshot;
 
 const AUTH_MIGRATION_SQL: &str = include_str!("../../../comet-auth/migrations/0001_comet_auth.sql");
+const RBAC_MIGRATION_SQL: &str =
+    include_str!("../../../comet-auth/migrations/0002_comet_auth_rbac.sql");
 
 pub fn init(args: AuthInitArgs) -> Result<()> {
     let project_dir = args.path.unwrap_or_else(|| PathBuf::from("."));
@@ -29,6 +31,12 @@ pub fn init(args: AuthInitArgs) -> Result<()> {
     fs::write(&path, AUTH_MIGRATION_SQL).with_context(|| format!("writing {}", path.display()))?;
 
     println!("Wrote {}", path.display());
+    if args.with_rbac {
+        let rbac_path = migrations_dir.join(format!("{:04}_comet_auth_rbac.sql", sequence + 1));
+        fs::write(&rbac_path, RBAC_MIGRATION_SQL)
+            .with_context(|| format!("writing {}", rbac_path.display()))?;
+        println!("Wrote {}", rbac_path.display());
+    }
     println!();
     println!("Add the runtime dependency if it is not present:");
     println!(
@@ -41,6 +49,12 @@ pub fn init(args: AuthInitArgs) -> Result<()> {
     println!("Mount auth in Rocket with:");
     println!("  .attach(comet_auth::Auth::<{db_binding}, {kv_binding}>::fairing(auth_config))");
     println!("  .mount(\"/auth\", comet_auth::routes::<{db_binding}, {kv_binding}>())");
+    if args.with_rbac {
+        println!();
+        println!("RBAC migration included. Protect routes with:");
+        println!("  #[comet_auth::requires_auth(role = \"admin\")]");
+        println!("  #[comet_auth::requires_auth(permission = \"resource:action\")]");
+    }
 
     Ok(())
 }
@@ -110,6 +124,7 @@ mod tests {
             path: Some(dir.path().to_path_buf()),
             db_binding: "DB".to_owned(),
             kv_binding: "AUTH_KV".to_owned(),
+            with_rbac: false,
         })
         .unwrap();
 
@@ -133,9 +148,28 @@ mod tests {
             path: Some(dir.path().to_path_buf()),
             db_binding: "DB".to_owned(),
             kv_binding: "AUTH_KV".to_owned(),
+            with_rbac: false,
         })
         .unwrap_err();
 
         assert!(error.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn writes_rbac_migration_when_requested() {
+        let dir = tempfile::tempdir().unwrap();
+
+        init(AuthInitArgs {
+            path: Some(dir.path().to_path_buf()),
+            db_binding: "DB".to_owned(),
+            kv_binding: "AUTH_KV".to_owned(),
+            with_rbac: true,
+        })
+        .unwrap();
+
+        let rbac =
+            fs::read_to_string(dir.path().join("migrations/0002_comet_auth_rbac.sql")).unwrap();
+        assert!(rbac.contains("comet_auth_roles"));
+        assert!(rbac.contains("comet_auth_user_permissions"));
     }
 }

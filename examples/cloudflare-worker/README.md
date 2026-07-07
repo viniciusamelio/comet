@@ -55,6 +55,8 @@ comet::cloudflare::fetch(req, env, ctx, rocket).await
   identity tokens for a Comet session.
 - `POST /auth/logout` — revoke the current session.
 - `GET /private/me` — protected route using `#[comet_auth::requires_auth]`.
+- `GET /private/admin` — RBAC-protected route using
+  `#[comet_auth::requires_auth(role = "admin")]`.
 - `GET /tasks` — list all tasks.
 - `POST /tasks` — create a task from a JSON body (`{"title": "..."}`) and
   publish a `created` event to the queue.
@@ -231,8 +233,8 @@ npm run test
 `tests/integration.sh` drives a real `wrangler dev` instance end to end: it
 resets local D1 state, applies migrations, starts the worker, exercises every
 public route over HTTP, verifies `/auth/session`, verifies that `/private/me`
-returns `401` without a session, confirms provider startup fails cleanly when
-local OAuth secrets are absent, confirms the queue consumer actually wrote the
+and `/private/admin` return `401` without a session, confirms provider startup
+fails cleanly when local OAuth secrets are absent, confirms the queue consumer actually wrote the
 `task_events` audit trail, round-trips a 1MiB object through R2, verifies the
 `/ws/echo` WebSocket route, and proves request/response bodies are
 genuinely streamed rather than buffered — a 1MiB `/echo` body round-trips

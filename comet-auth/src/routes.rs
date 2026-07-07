@@ -349,12 +349,16 @@ impl<'r> FromRequest<'r> for OptionalAuthSession {
 }
 
 #[cfg(feature = "cloudflare")]
-async fn load_session_guard(request: &Request<'_>) -> Result<Option<AuthSession>, AuthError> {
+pub(crate) async fn load_session_guard(
+    request: &Request<'_>,
+) -> Result<Option<AuthSession>, AuthError> {
     comet::cloudflare::local(load_session(request)).await
 }
 
 #[cfg(not(feature = "cloudflare"))]
-async fn load_session_guard(request: &Request<'_>) -> Result<Option<AuthSession>, AuthError> {
+pub(crate) async fn load_session_guard(
+    request: &Request<'_>,
+) -> Result<Option<AuthSession>, AuthError> {
     load_session(request).await
 }
 

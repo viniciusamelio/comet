@@ -12,6 +12,8 @@ faz quatro coisas:
   módulos de rotas CRUD a um projeto existente.
 - `comet migrate init|generate|status` — conduz a geração de migrations a
   partir da metadata real e compilada das entidades.
+- `comet auth init` — adiciona migrations de autenticação e, opcionalmente,
+  RBAC.
 - `comet test unit|integration|perf|all` — roda o gate de testes/release do
   projeto.
 
@@ -193,6 +195,22 @@ comet migrate generate add_notes
 # Wrote migrations/0002_add_notes.sql
 # Updated schema snapshot at migrations/.comet-schema.json
 ```
+
+## `comet auth init`
+
+```
+comet auth init [--path <dir>] [--db-binding <NOME>] [--kv-binding <NOME>] [--with-rbac]
+```
+
+Escreve a migration de `comet-auth` no próximo número disponível em
+`migrations/` e imprime os snippets de dependência, D1/KV e montagem Rocket.
+
+- `--db-binding`: binding D1 das tabelas duráveis de auth (padrão `DB`).
+- `--kv-binding`: binding KV para OAuth state/cache de sessão (padrão
+  `AUTH_KV`).
+- `--with-rbac`: também escreve a migration de roles/permissões usada por
+  `#[comet_auth::requires_auth(role = "...")]` e
+  `#[comet_auth::requires_auth(permission = "...")]`.
 
 ## `comet migrate status`
 

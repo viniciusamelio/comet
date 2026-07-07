@@ -65,6 +65,7 @@ booleano" mencionada em [Nebula ORM](/pt-BR/docs/nebula-orm).
 | `POST /auth/native/google`, `POST /auth/native/apple` | login nativo por identity token |
 | `POST /auth/logout` | revoga a sessão atual |
 | `GET /private/me` | rota protegida com `#[comet_auth::requires_auth]` |
+| `GET /private/admin` | rota RBAC com `#[comet_auth::requires_auth(role = "admin")]` |
 | `GET /tasks`, `GET /tasks/<id>` | listar/buscar tarefas |
 | `POST /tasks` | criar tarefa (publica evento na queue) |
 | `POST /tasks/<id>/complete` | concluir tarefa (publica evento na queue) |
@@ -197,8 +198,10 @@ pub async fn private_me(session: comet_auth::AuthSession) -> Json<PrivateMeRespo
 }
 ```
 
-As rotas públicas continuam públicas. Sem sessão, `/private/me` responde
-`401 Unauthorized`, enquanto `/auth/session` retorna `authenticated: false`.
+As rotas públicas continuam públicas. Sem sessão, `/private/me` e
+`/private/admin` respondem `401 Unauthorized`, enquanto `/auth/session`
+retorna `authenticated: false`. Com sessão válida mas sem role/permissão, uma
+rota RBAC responde `403 Forbidden`.
 
 ## Configurando o `wrangler.jsonc`
 

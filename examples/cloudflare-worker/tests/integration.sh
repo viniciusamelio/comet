@@ -68,6 +68,9 @@ check "auth session route reports anonymous visitor" "false" "$(echo "$AUTH_SESS
 PRIVATE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/private/me")
 check "protected auth demo route rejects anonymous visitor" "401" "$PRIVATE_STATUS"
 
+PRIVATE_ADMIN_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/private/admin")
+check "rbac auth demo route rejects anonymous visitor" "401" "$PRIVATE_ADMIN_STATUS"
+
 GOOGLE_START_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/auth/google/start")
 check "configured auth provider route fails cleanly without local secrets" "400" "$GOOGLE_START_STATUS"
 
