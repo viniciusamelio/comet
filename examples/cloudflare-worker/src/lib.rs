@@ -14,5 +14,4 @@ pub mod orgs;
 pub mod tasks;
 pub mod users;
 
-#[cfg(target_arch = "wasm32")]
 mod entry;

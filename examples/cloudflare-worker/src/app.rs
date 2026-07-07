@@ -5,6 +5,7 @@ use crate::assets::routes::{get_asset, put_asset};
 use crate::demo::routes::{echo, index, stream_demo, websocket_echo};
 use crate::tasks::routes::{complete_task, create_task, get_task, list_tasks};
 
+#[allow(unused)]
 pub fn rocket(env: Env, _ctx: Context) -> Rocket<Build> {
     use rocket::data::{Limits, ToByteUnit};
 
