@@ -27,6 +27,8 @@ pub enum AuthError {
     InvalidOAuthState,
     #[error("oauth provider request failed: {0}")]
     ProviderRequest(String),
+    #[error("identity token is invalid: {0}")]
+    InvalidIdentityToken(String),
     #[error("random bytes unavailable: {0}")]
     Random(getrandom::Error),
     #[error("serialization error: {0}")]
@@ -56,7 +58,8 @@ impl AuthError {
             | Self::ProviderNotConfigured(_)
             | Self::MissingProviderSetting { .. }
             | Self::InvalidOAuthState
-            | Self::ProviderRequest(_) => Status::BadRequest,
+            | Self::ProviderRequest(_)
+            | Self::InvalidIdentityToken(_) => Status::BadRequest,
             _ => Status::InternalServerError,
         }
     }
@@ -72,6 +75,7 @@ impl AuthError {
             Self::MissingProviderSetting { .. } => "missing_provider_setting",
             Self::InvalidOAuthState => "invalid_oauth_state",
             Self::ProviderRequest(_) => "provider_request",
+            Self::InvalidIdentityToken(_) => "invalid_identity_token",
             Self::Random(_) => "random",
             Self::Serde(_) => "serde",
             #[cfg(feature = "cloudflare")]

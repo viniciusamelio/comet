@@ -14,9 +14,11 @@ native-client = []
 [dependencies]
 base64ct = { version = "1", features = ["alloc"] }
 comet = { path = "..", default-features = false, features = ["cloudflare-d1", "cloudflare-kv"], optional = true }
+crypto-bigint = "0.7"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 js-sys = "0.3"
 p256 = { version = "0.14.0-pre.2", features = ["ecdsa", "pem", "pkcs8"] }
+rsa = { version = "0.10.0-rc.18", features = ["sha2"] }
 rocket = { path = "../vendor/rocket/core/lib", default-features = false, features = ["json", "worker"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

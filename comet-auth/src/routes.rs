@@ -8,7 +8,7 @@ use rocket::serde::json::Json;
 #[cfg(feature = "cloudflare")]
 use rocket::{Build, Rocket};
 use rocket::{Request, Route};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "cloudflare")]
 use crate::session::{self as session_core, CachedSession};
@@ -82,12 +82,12 @@ where
     DB: BindingName + Send + Sync + 'static,
     KV: BindingName + Send + Sync + 'static,
 {
-    rocket::routes![session, logout, oauth_start, oauth_callback]
+    rocket::routes![session, logout, oauth_start, oauth_callback, native_login]
 }
 
 #[cfg(not(feature = "cloudflare"))]
 pub fn routes<DB, KV>() -> Vec<Route> {
-    rocket::routes![session, logout, oauth_start, oauth_callback]
+    rocket::routes![session, logout, oauth_start, oauth_callback, native_login]
 }
 
 #[derive(Debug, Serialize)]
@@ -96,6 +96,22 @@ pub struct SessionResponse {
     pub authenticated: bool,
     pub session: Option<AuthSession>,
     pub user: Option<CurrentUser>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(not(feature = "cloudflare"), allow(dead_code))]
+#[serde(crate = "rocket::serde")]
+pub struct NativeLoginRequest {
+    pub id_token: String,
+    pub nonce: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(crate = "rocket::serde")]
+pub struct NativeLoginResponse {
+    pub token: String,
+    pub session: AuthSession,
+    pub user: CurrentUser,
 }
 
 #[rocket::get("/session")]
@@ -193,32 +209,15 @@ pub async fn oauth_callback(
         &oauth_state.code_verifier,
     )
     .await?;
-    let identity = crate::oauth::fetch_identity(provider, &tokens).await?;
-    let db = env.d1(auth_state.db_binding)?;
-    let store = D1SessionStore::new(db);
-    let user = store.upsert_account(identity).await?;
-    let pepper = token_pepper(env, &auth_state.config)?;
-    let issued = store
-        .create_session(NewSession {
-            user_id: user.id,
-            ttl_seconds: auth_state.config.session_ttl_seconds,
-            token_pepper: pepper,
-            user_agent_hash: None,
-            ip_hash: None,
-        })
-        .await?;
-
-    if let Ok(kv) = env.kv(auth_state.kv_binding) {
-        let ttl = issued
-            .stored
-            .expires_at
-            .saturating_sub(session_core::now_unix()) as u64;
-        if ttl > 0 {
-            let _ = KvSessionCache::new(kv)
-                .put(&CachedSession::from(&issued.stored), ttl)
-                .await;
-        }
-    }
+    let identity = crate::oauth::fetch_identity(
+        &auth_state.config,
+        env.inner(),
+        provider,
+        &tokens,
+        oauth_state.nonce.as_deref(),
+    )
+    .await?;
+    let issued = issue_session(auth_state, env, identity).await?;
 
     jar.add(build_session_cookie(&auth_state.config, issued.token));
     Ok(Redirect::to(
@@ -236,6 +235,53 @@ pub async fn oauth_callback(
     error_description: Option<&str>,
 ) -> Result<Redirect, AuthError> {
     let _ = (provider, code, state, error, error_description);
+    Err(AuthError::MissingEnv)
+}
+
+#[cfg(feature = "cloudflare")]
+#[rocket::post("/native/<provider>", data = "<login>")]
+pub async fn native_login(
+    provider: &str,
+    login: Json<NativeLoginRequest>,
+    jar: &CookieJar<'_>,
+    auth_state: &rocket::State<AuthState>,
+    env: &rocket::State<worker::Env>,
+) -> Result<Json<NativeLoginResponse>, AuthError> {
+    let provider = OAuthProviderId::parse(provider)?;
+    if matches!(provider, OAuthProviderId::GitHub) {
+        return Err(AuthError::UnsupportedProvider("github_native".into()));
+    }
+    let identity = crate::oauth::validate_native_identity(
+        &auth_state.config,
+        env.inner(),
+        provider,
+        &login.id_token,
+        login.nonce.as_deref(),
+    )
+    .await?;
+    let issued = issue_session(auth_state, env, identity).await?;
+    let session = AuthSession {
+        id: issued.stored.id.clone(),
+        user: issued.stored.user.clone().into(),
+        expires_at: issued.stored.expires_at,
+    };
+    let user = session.user.clone();
+    jar.add(build_session_cookie(&auth_state.config, issued.token.clone()));
+
+    Ok(Json(NativeLoginResponse {
+        token: issued.token,
+        session,
+        user,
+    }))
+}
+
+#[cfg(not(feature = "cloudflare"))]
+#[rocket::post("/native/<provider>", data = "<login>")]
+pub async fn native_login(
+    provider: &str,
+    login: Json<NativeLoginRequest>,
+) -> Result<Json<NativeLoginResponse>, AuthError> {
+    let _ = (provider, login);
     Err(AuthError::MissingEnv)
 }
 
@@ -313,11 +359,7 @@ async fn load_session(request: &Request<'_>) -> Result<Option<AuthSession>, Auth
         .rocket()
         .state::<AuthState>()
         .ok_or(AuthError::MissingConfig)?;
-    let token = request
-        .cookies()
-        .get(&state.config.session_cookie)
-        .map(|cookie| cookie.value().to_owned())
-        .ok_or(AuthError::MissingSession)?;
+    let token = session_token(request, &state.config).ok_or(AuthError::MissingSession)?;
     let env = request
         .rocket()
         .state::<worker::Env>()
@@ -358,6 +400,56 @@ async fn load_session(request: &Request<'_>) -> Result<Option<AuthSession>, Auth
         user: stored.user.into(),
         expires_at: stored.expires_at,
     }))
+}
+
+#[cfg(feature = "cloudflare")]
+async fn issue_session(
+    auth_state: &AuthState,
+    env: &worker::Env,
+    identity: crate::ProviderIdentity,
+) -> Result<crate::IssuedSession, AuthError> {
+    let db = env.d1(auth_state.db_binding)?;
+    let store = D1SessionStore::new(db);
+    let user = store.upsert_account(identity).await?;
+    let pepper = token_pepper(env, &auth_state.config)?;
+    let issued = store
+        .create_session(NewSession {
+            user_id: user.id,
+            ttl_seconds: auth_state.config.session_ttl_seconds,
+            token_pepper: pepper,
+            user_agent_hash: None,
+            ip_hash: None,
+        })
+        .await?;
+
+    if let Ok(kv) = env.kv(auth_state.kv_binding) {
+        let ttl = issued
+            .stored
+            .expires_at
+            .saturating_sub(session_core::now_unix()) as u64;
+        if ttl > 0 {
+            let _ = KvSessionCache::new(kv)
+                .put(&CachedSession::from(&issued.stored), ttl)
+                .await;
+        }
+    }
+
+    Ok(issued)
+}
+
+#[cfg(feature = "cloudflare")]
+fn session_token(request: &Request<'_>, config: &AuthConfig) -> Option<String> {
+    request
+        .cookies()
+        .get(&config.session_cookie)
+        .map(|cookie| cookie.value().to_owned())
+        .or_else(|| {
+            request
+                .headers()
+                .get_one("authorization")
+                .and_then(|value| value.strip_prefix("Bearer "))
+                .map(str::to_owned)
+        })
 }
 
 #[cfg(not(feature = "cloudflare"))]
