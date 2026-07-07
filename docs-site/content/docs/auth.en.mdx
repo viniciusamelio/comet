@@ -29,7 +29,7 @@ Configure one D1 database and one KV namespace in `wrangler.jsonc`:
 Add the auth migration:
 
 ```sh
-comet auth init --db-binding DB --kv-binding AUTH_KV
+comet auth init --db-binding DB --kv-binding AUTH_KV --with-rbac
 npx wrangler d1 migrations apply DB --local
 npx wrangler d1 migrations apply DB --remote
 ```
@@ -97,8 +97,31 @@ async fn maybe(session: comet_auth::OptionalAuthSession) -> &'static str {
 }
 ```
 
-`scope = "..."` is already accepted and currently means required
-authentication. Real RBAC enforcement is planned for the next phase.
+Authorization policies are enforced with D1-backed RBAC:
+
+```rust
+#[comet_auth::requires_auth(role = "admin")]
+#[rocket::get("/admin")]
+async fn admin() -> &'static str {
+    "admin"
+}
+
+#[comet_auth::requires_auth(permission = "boards:write")]
+#[rocket::post("/boards")]
+async fn create_board() -> &'static str {
+    "created"
+}
+```
+
+`scope = "..."` works as a permission alias. Missing sessions return
+`401 Unauthorized`; authenticated sessions without the required role,
+permission, or scope return `403 Forbidden`.
+
+To create RBAC tables when initializing auth:
+
+```sh
+comet auth init --with-rbac
+```
 
 ## Provider Secrets
 

@@ -14,6 +14,8 @@ pub enum AuthError {
     MissingSession,
     #[error("session is invalid or expired")]
     InvalidSession,
+    #[error("authenticated session is not authorized for this route")]
+    Forbidden,
     #[error("unsupported auth provider: {0}")]
     UnsupportedProvider(String),
     #[error("auth provider `{0}` is not configured")]
@@ -54,6 +56,7 @@ impl AuthError {
     pub fn status(&self) -> Status {
         match self {
             Self::MissingSession | Self::InvalidSession => Status::Unauthorized,
+            Self::Forbidden => Status::Forbidden,
             Self::UnsupportedProvider(_)
             | Self::ProviderNotConfigured(_)
             | Self::MissingProviderSetting { .. }
@@ -70,6 +73,7 @@ impl AuthError {
             Self::MissingEnv => "missing_env",
             Self::MissingSession => "missing_session",
             Self::InvalidSession => "invalid_session",
+            Self::Forbidden => "forbidden",
             Self::UnsupportedProvider(_) => "unsupported_provider",
             Self::ProviderNotConfigured(_) => "provider_not_configured",
             Self::MissingProviderSetting { .. } => "missing_provider_setting",

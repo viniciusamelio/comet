@@ -140,6 +140,10 @@ pub struct AuthInitArgs {
     /// Wrangler KV binding used for OAuth state and optional session cache.
     #[arg(long, default_value = "AUTH_KV")]
     pub kv_binding: String,
+
+    /// Also add the RBAC authorization migration.
+    #[arg(long)]
+    pub with_rbac: bool,
 }
 
 #[derive(Subcommand)]

@@ -11,6 +11,7 @@ outside the main workspace — just like `comet-macros`. It does four things:
   route modules to an existing project.
 - `comet migrate init|generate|status` — drives migration generation from
   the entities' real, compiled metadata.
+- `comet auth init` — adds authentication migrations and optional RBAC.
 - `comet test unit|integration|perf|all` — runs the project's test/release
   gate.
 
@@ -193,6 +194,22 @@ comet migrate generate add_notes
 # Wrote migrations/0002_add_notes.sql
 # Updated schema snapshot at migrations/.comet-schema.json
 ```
+
+## `comet auth init`
+
+```
+comet auth init [--path <dir>] [--db-binding <NAME>] [--kv-binding <NAME>] [--with-rbac]
+```
+
+Writes the `comet-auth` migration at the next available number in
+`migrations/` and prints dependency, D1/KV, and Rocket mounting snippets.
+
+- `--db-binding`: D1 binding for durable auth tables (default `DB`).
+- `--kv-binding`: KV binding for OAuth state/session cache (default
+  `AUTH_KV`).
+- `--with-rbac`: also writes the roles/permissions migration used by
+  `#[comet_auth::requires_auth(role = "...")]` and
+  `#[comet_auth::requires_auth(permission = "...")]`.
 
 ## `comet migrate status`
 

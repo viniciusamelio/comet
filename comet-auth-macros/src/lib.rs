@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 
 use proc_macro2::Span;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{FnArg, Ident, ItemFn, LitStr, Pat, Result, Token, Type, parse_macro_input, parse_quote};
@@ -10,16 +10,27 @@ use syn::{FnArg, Ident, ItemFn, LitStr, Pat, Result, Token, Type, parse_macro_in
 enum GuardKind {
     Required,
     Optional,
+    Authorized,
 }
 
 #[derive(Debug, Default)]
 struct RequiresAuthArgs {
     optional: bool,
-    scope: Option<LitStr>,
+    roles: Vec<LitStr>,
+    permissions: Vec<LitStr>,
+    scopes: Vec<LitStr>,
+}
+
+impl RequiresAuthArgs {
+    fn has_authorization_policy(&self) -> bool {
+        !self.roles.is_empty() || !self.permissions.is_empty() || !self.scopes.is_empty()
+    }
 }
 
 enum RequiresAuthArg {
     Optional,
+    Role(LitStr),
+    Permission(LitStr),
     Scope(LitStr),
 }
 
@@ -28,6 +39,14 @@ impl Parse for RequiresAuthArg {
         let name: Ident = input.parse()?;
         match name.to_string().as_str() {
             "optional" => Ok(Self::Optional),
+            "role" => {
+                input.parse::<Token![=]>()?;
+                Ok(Self::Role(input.parse()?))
+            }
+            "permission" => {
+                input.parse::<Token![=]>()?;
+                Ok(Self::Permission(input.parse()?))
+            }
             "scope" => {
                 input.parse::<Token![=]>()?;
                 Ok(Self::Scope(input.parse()?))
@@ -51,21 +70,16 @@ impl Parse for RequiresAuthArgs {
         for arg in parsed {
             match arg {
                 RequiresAuthArg::Optional => args.optional = true,
-                RequiresAuthArg::Scope(scope) => {
-                    if args.scope.replace(scope).is_some() {
-                        return Err(syn::Error::new(
-                            Span::call_site(),
-                            "`scope` can only be declared once",
-                        ));
-                    }
-                }
+                RequiresAuthArg::Role(role) => args.roles.push(role),
+                RequiresAuthArg::Permission(permission) => args.permissions.push(permission),
+                RequiresAuthArg::Scope(scope) => args.scopes.push(scope),
             }
         }
 
-        if args.optional && args.scope.is_some() {
+        if args.optional && args.has_authorization_policy() {
             return Err(syn::Error::new(
                 Span::call_site(),
-                "`optional` cannot be combined with `scope`",
+                "`optional` cannot be combined with authorization policies",
             ));
         }
 
@@ -90,6 +104,8 @@ fn expand_requires_auth(
 ) -> Result<proc_macro2::TokenStream> {
     let desired = if args.optional {
         GuardKind::Optional
+    } else if args.has_authorization_policy() {
+        GuardKind::Authorized
     } else {
         GuardKind::Required
     };
@@ -112,16 +128,16 @@ fn expand_requires_auth(
     }
 
     match (desired, existing) {
-        (GuardKind::Required, Some(GuardKind::Optional)) => {
+        (GuardKind::Required | GuardKind::Authorized, Some(GuardKind::Optional)) => {
             return Err(syn::Error::new(
                 item.sig.ident.span(),
-                "`requires_auth` requires `AuthSession`, but this route already takes `OptionalAuthSession`",
+                "`requires_auth` requires an authenticated session, but this route already takes `OptionalAuthSession`",
             ));
         }
-        (GuardKind::Optional, Some(GuardKind::Required)) => {
+        (GuardKind::Optional, Some(GuardKind::Required | GuardKind::Authorized)) => {
             return Err(syn::Error::new(
                 item.sig.ident.span(),
-                "`requires_auth(optional)` requires `OptionalAuthSession`, but this route already takes `AuthSession`",
+                "`requires_auth(optional)` requires `OptionalAuthSession`, but this route already takes a required auth guard",
             ));
         }
         (_, Some(_)) => {}
@@ -131,16 +147,39 @@ fn expand_requires_auth(
         (GuardKind::Optional, None) => {
             item.sig.inputs.insert(0, optional_auth_session_arg());
         }
+        (GuardKind::Authorized, None) => {}
     }
 
-    if let Some(scope) = args.scope {
-        item.block.stmts.insert(
-            0,
-            parse_quote! { let _comet_auth_required_scope: &str = #scope; },
-        );
-    }
+    let policy = if args.has_authorization_policy() {
+        let policy_ident = format_ident!("__CometAuthPolicyFor{}", item.sig.ident);
+        let roles = args.roles;
+        let permissions = args.permissions;
+        let scopes = args.scopes;
+        item.sig
+            .inputs
+            .insert(0, authorized_session_arg(&policy_ident));
 
-    Ok(quote!(#item))
+        quote! {
+            #[allow(non_camel_case_types)]
+            pub struct #policy_ident;
+
+            impl ::comet_auth::RequiredAuthorization for #policy_ident {
+                const REQUIREMENT: ::comet_auth::AuthorizationRequirement =
+                    ::comet_auth::AuthorizationRequirement::new(
+                        &[#(#roles),*],
+                        &[#(#permissions),*],
+                        &[#(#scopes),*],
+                    );
+            }
+        }
+    } else {
+        quote!()
+    };
+
+    Ok(quote! {
+        #policy
+        #item
+    })
 }
 
 fn auth_guard_kind(ty: &Type) -> Option<GuardKind> {
@@ -152,6 +191,7 @@ fn auth_guard_kind(ty: &Type) -> Option<GuardKind> {
     match ident.to_string().as_str() {
         "AuthSession" => Some(GuardKind::Required),
         "OptionalAuthSession" => Some(GuardKind::Optional),
+        "AuthorizedSession" => Some(GuardKind::Authorized),
         _ => None,
     }
 }
@@ -164,4 +204,9 @@ fn auth_session_arg() -> FnArg {
 fn optional_auth_session_arg() -> FnArg {
     let pat: Pat = parse_quote!(_comet_auth_session);
     parse_quote!(#pat: ::comet_auth::OptionalAuthSession)
+}
+
+fn authorized_session_arg(policy_ident: &Ident) -> FnArg {
+    let pat: Pat = parse_quote!(_comet_auth_authorized_session);
+    parse_quote!(#pat: ::comet_auth::AuthorizedSession<#policy_ident>)
 }
