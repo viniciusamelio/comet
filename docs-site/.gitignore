@@ -1,5 +1,7 @@
 node_modules
 .next
 .source
+.open-next
+.wrangler
 next-env.d.ts
 *.tsbuildinfo

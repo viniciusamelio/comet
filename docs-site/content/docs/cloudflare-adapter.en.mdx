@@ -1,0 +1,293 @@
+---
+title: Cloudflare adapter
+description: How comet::cloudflare runs Rocket on Workers — dispatch, streaming, bindings, and WebSocket.
+---
+
+The `comet::cloudflare` module (feature `cloudflare`) is what actually
+connects a Rocket application to the Cloudflare Workers runtime. This page
+covers its API, the streaming mechanism, the typed binding guards, the R2
+object responder, WebSocket support, and the full feature matrix.
+
+## Why a Rocket fork exists
+
+Published Rocket depends on Hyper/Tokio for networking, which doesn't
+compile for `wasm32-unknown-unknown`. Comet vendors a Rocket fork in
+`vendor/rocket` (pinned to a specific upstream commit) with two patches:
+
+- **`rocket-worker-feature.patch`** — adds a `worker` feature that splits
+  Rocket's core (routing, guards, responders, data body) from the
+  server-only surface (Hyper listener, TLS, HTTP/2-3, Tokio's `net`/`fs`/
+  `signal`). This is what makes Rocket compile for
+  `wasm32-unknown-unknown`. It also exposes external lifecycle hooks
+  (`Rocket<Build>::orbit_external()`, `Rocket<Orbit>::dispatch_external()`)
+  to run without opening a socket, and makes route handler futures
+  **local-boxed** under `worker`, so routes can `.await` `!Send` JS futures
+  directly.
+- **`rocket-worker-streaming-request.patch`** — adds a `RawStream::Worker`
+  variant and a `Data::from_stream()` constructor, so a Worker request body
+  can be streamed straight into Rocket's `Data` type instead of being
+  buffered first.
+
+The fork is vendored (checked into the repository) rather than pointing at
+an external path — an earlier setup broke when the patched checkout lived
+in `/tmp` and didn't survive a reboot.
+
+## Core API
+
+All the types below live in `comet::cloudflare`.
+
+### `fetch`
+
+The simplest entry point. Takes the `worker::Request`, `Env`, `Context`,
+and a `build_rocket: FnOnce(Env, Context) -> Rocket<Build>` function:
+
+```rust
+#[event(fetch)]
+pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
+    comet::cloudflare::fetch(req, env, ctx, rocket).await
+}
+```
+
+Internally, `fetch` calls `serve_cached`, which ignites `build_rocket()` at
+most once per Worker isolate and reuses the resulting `Rocket<Orbit>` for
+every following request on the same isolate — routes, fairings, and
+sentinels only run once per isolate lifetime.
+
+### `FetchApp`
+
+A named wrapper (`WorkerFetchApp<fn(Env, Context) -> Rocket<Build>>`) around
+the same builder-function shape, for apps that prefer to name the adapter
+object explicitly instead of calling the free `fetch` function.
+
+### `serve`
+
+Lower level: dispatches through anything implementing the `Application`
+trait (`fn dispatch(self, request: WorkerRequest) -> DispatchFuture`).
+Unlike `fetch`/`serve_cached`, it **doesn't** cache the ignited Rocket — it
+re-ignites on every call. It's the primitive that `impl Application for
+Rocket<Build>` and `serve_cached` are built on.
+
+### `impl Application for Rocket<Build>`
+
+Lets a plain `Rocket<Build>` (no `worker::Env`/`Context` needed) be
+dispatched with a `WorkerRequest`/`WorkerResponse` pair — used heavily in
+adapter-level tests, without needing a real Worker runtime.
+
+### `local` and `local_stream`
+
+- `local(fut)` wraps a `!Send` future in `send_wrapper::SendWrapper`, so it
+  type-checks as `Send` where required. Since the patched Rocket already
+  local-boxes route futures under `worker`, ordinary handlers no longer
+  need this — it remains for manual/compatibility cases.
+- `local_stream(stream)` does the same for `Stream`s, needed because
+  Rocket's own streaming responders (`ByteStream!`/`TextStream!`) still
+  require `S: Send`:
+
+```rust
+#[get("/stream")]
+pub fn stream_demo(
+) -> rocket::response::stream::ByteStream<impl rocket::futures::stream::Stream<Item = Vec<u8>>> {
+    let raw = rocket::response::stream::stream! {
+        for chunk in 0..3u8 {
+            yield vec![b'0' + chunk; 4096];
+            worker::Delay::from(std::time::Duration::from_millis(400)).await;
+        }
+    };
+    rocket::response::stream::ByteStream(comet::cloudflare::local_stream(raw))
+}
+```
+
+## Request/response streaming
+
+Both the request and response bodies flow through Rocket without full
+buffering:
+
+- **Request → Rocket `Data`**: `worker::Request::stream()` is mapped to
+  `WorkerBody::Streamed` and handed to Rocket via `Data::from_stream()` (the
+  patch's new constructor). A body-less request (e.g. `GET`) falls back to
+  `WorkerBody::Buffered(vec![])`.
+- **Response → Worker stream**: Rocket's response body implements
+  `tokio::io::AsyncRead`; the adapter reads it in 64KiB chunks via
+  `async_stream::try_stream!` and hands it to
+  `worker::Response::builder().from_stream(...)`.
+- **Small-body fast path**: if the response size is known and ≤ 8 KiB (the
+  same threshold as Rocket's own `Limits::STRING` default), or the body is
+  absent, the adapter reads it all at once and returns
+  `WorkerBody::Buffered` — skipping the streaming machinery for the common
+  case of small API responses.
+
+**Concrete proof**: `examples/cloudflare-worker/tests/integration.sh` posts
+a 1 MiB body and checks a byte-for-byte round trip, and hits the `/stream`
+route (3 chunks of 4096 bytes, separated by a real `worker::Delay`)
+asserting that time-to-first-byte is a small fraction of total response
+time — proving chunks are flushed as they're produced, not accumulated
+until the handler finishes.
+
+## Typed guards for bindings
+
+Every Cloudflare binding has a typed request guard, following the same
+pattern: a marker type implementing `BindingName` (a `NAME: &'static str`
+constant), a generic wrapper `X<B: BindingName>` that `Deref`s to the
+matching `worker` type, and a `FromRequest` impl that pulls `worker::Env`
+out of Rocket managed state (`.manage(env)`) and calls the right accessor
+(`env.d1`, `env.queue`, `env.kv`, `env.service`, `env.hyperdrive`,
+`env.bucket`).
+
+```rust
+pub struct DB;
+impl BindingName for DB { const NAME: &'static str = "DB"; }
+
+pub struct TaskEvents;
+impl BindingName for TaskEvents { const NAME: &'static str = "TASK_EVENTS"; }
+
+#[post("/tasks", data = "<new_task>")]
+pub async fn create_task(
+    new_task: Json<NewTask>,
+    db: D1<DB>,
+    queue: QueueBinding<TaskEvents>,
+) -> ApiResult<Json<Task>> {
+    let row = TaskRow::insert()
+        .set(TaskRow::TITLE, new_task.validated_title()?)
+        .to_statement()
+        .fetch_one_d1::<TaskRow>(&db)
+        .await?;
+
+    let task: Task = row.into();
+    queue.send(TaskEvent { task_id: task.id, kind: TaskEventKind::Created }).await?;
+    Ok(Json(task))
+}
+```
+
+The binding name (`"DB"`, `"TASK_EVENTS"`) needs to match the name
+configured in `wrangler.jsonc`.
+
+Available guards: `D1<B>`, `QueueBinding<B>`, `Kv<B>`, `R2Bucket<B>`,
+`ServiceBinding<B>`, `Hyperdrive<B>`. All of them are `Send + Sync` — a
+required property, since Rocket route inputs must be, even though the
+underlying JS bindings are only ever touched by the Worker's single thread
+(`ServiceBinding` and `R2Bucket` use `unsafe impl Send/Sync`, justified by
+wasm32's single-threaded execution model).
+
+## `R2Object`: the R2 object responder
+
+`R2Object` is a Rocket `Responder` that streams an R2 object's body instead
+of buffering it, preserving R2's own HTTP metadata (`ETag`,
+`Content-Length`, `Accept-Ranges: bytes`) and, for partial reads,
+`Content-Range` with a `206 Partial Content` status:
+
+```rust
+#[put("/assets/<key..>", data = "<body>")]
+pub async fn put_asset(key: PathBuf, body: Capped<Vec<u8>>, bucket: R2Bucket<Assets>)
+    -> Result<Status, Status>
+{
+    bucket.put(asset_key(key), body.value).execute().await
+        .map(|_| Status::Created)
+        .map_err(|_| Status::InternalServerError)
+}
+
+#[get("/assets/<key..>")]
+pub async fn get_asset(key: PathBuf, bucket: R2Bucket<Assets>) -> Option<R2Object> {
+    R2Object::get(&bucket, asset_key(key)).await.ok().flatten()
+}
+```
+
+`R2Object::get(bucket, key)` does a plain `GET` (200); `R2Object::get_range(bucket, key, range)`
+sets the status to `206`. Parsing the incoming HTTP `Range` header is
+**not** done automatically by the responder — the caller extracts the range
+and passes a `worker::Range` to `get_range()`.
+
+## WebSocket
+
+Behind the `cloudflare-websocket` feature. The preferred API is a normal
+Rocket route using `WebSocketUpgrade` as a guard (returns
+`Status::UpgradeRequired` if the `Upgrade: websocket` header is missing) and
+`WebSocketResponse` as the return type:
+
+```rust
+#[get("/ws/echo")]
+pub async fn websocket_echo(ws: WebSocketUpgrade) -> WebSocketResponse {
+    ws.accept(|socket| async move {
+        let mut events = socket.events()?;
+        while let Some(event) = events.next().await {
+            match event? {
+                WebsocketEvent::Message(message) => {
+                    if let Some(text) = message.text() {
+                        socket.send_with_str(text)?;
+                    } else if let Some(bytes) = message.bytes() {
+                        socket.send_with_bytes(bytes)?;
+                    }
+                }
+                WebsocketEvent::Close(_) => break,
+            }
+        }
+        Ok(())
+    })
+}
+```
+
+Under the hood: `WebSocketResponse::respond_to` stashes the handler closure
+in a `thread_local!` and returns a sentinel `101 Switching Protocols`
+response. `dispatch_on_orbit` detects that sentinel, retrieves the handler,
+creates a real `worker::WebSocketPair`, accepts the connection on the
+server side, runs the handler via `wasm_bindgen_futures::spawn_local`, and
+returns the real upgrade response. Lower-level escape hatches
+(`is_websocket_upgrade()`, `websocket_response()`) remain available for
+handling things manually outside of Rocket routing.
+
+## `native-client` and `RocketWorker`
+
+The `native-client` feature (on by default) provides `RocketWorker`, which
+dispatches `WorkerRequest`/`WorkerResponse` through Rocket's ordinary local
+async client — no `worker` crate, no wasm target, in a pure native test
+binary:
+
+```rust
+let app = rocket::build().mount("/", rocket::routes![index]);
+let worker = RocketWorker::new(app).await?;
+let response = worker.dispatch(WorkerRequest::get("/")).await?;
+assert_eq!(response.status, 200);
+```
+
+It's intentionally buffered-only (streamed bodies return
+`AdapterError::UnsupportedStreamedBody`) and doesn't create a
+`worker::Env`/bindings — great for testing pure route/status/JSON guard
+logic. See [the full testing strategy](https://github.com/viniciusamelio/comet/blob/main/docs/testing.md)
+for the three tiers: `RocketWorker` (native, cheapest) →
+`cloudflare::Application::dispatch` (native, exercises the real external
+dispatch path) → `wrangler dev` (full integration, the only tier that
+exercises real bindings and WebSocket).
+
+## Feature matrix
+
+| Feature | Enables |
+|---|---|
+| `native-client` (default) | `RocketWorker`: dispatches via Rocket's local client, no `worker` runtime needed. |
+| `cloudflare` | The core of `comet::cloudflare`: `fetch()`, `FetchApp`, `serve()`, `serve_cached()`, `Application` for `Rocket<Build>`, `local()`, `local_stream()`. Requires `worker`. |
+| `cloudflare-d1` | `D1<B>` guard (also enables `worker/d1`). |
+| `cloudflare-queue` | `QueueBinding<B>` guard (also enables `worker/queue`). |
+| `cloudflare-kv` | `Kv<B>` guard. |
+| `cloudflare-r2` | `R2Bucket<B>` guard **and** the `R2Object` responder. |
+| `cloudflare-service` | `ServiceBinding<B>` guard. |
+| `cloudflare-hyperdrive` | `Hyperdrive<B>` guard. |
+| `cloudflare-websocket` | `WebSocketUpgrade`, `WebSocketResponse`, and low-level helpers. Keep it off for HTTP-only Workers. |
+| `nebula` | The Nebula ORM core (see [Nebula ORM](/en/docs/nebula-orm)). |
+| `nebula-d1` | Executing Nebula statements against D1; enables `nebula`, `cloudflare-d1`, `serde`. |
+| `nebula-schema` | A serializable mirror of Nebula's schema, used by `comet-cli`; enables `nebula`, `serde`; doesn't require `cloudflare`/`worker`. |
+
+All `cloudflare-*` sub-features imply `cloudflare` (which in turn requires
+`dep:worker`).
+
+## Known limitations
+
+- **No filesystem-backed responders**: `FileServer`, `NamedFile`, and
+  disk-backed `TempFile` are not supported — Workers expose no durable
+  local filesystem. `R2Object`/`R2Bucket` is the storage-backed replacement
+  path, not a filesystem shim.
+- **`Range` parsing is manual**: `R2Object::get_range()` requires the
+  caller to build a `worker::Range`.
+- **`comet` isn't published to crates.io** — see the matching section in
+  [Getting Started](/en/docs/getting-started).
+- **`RocketWorker` doesn't test streaming or bindings** — it always
+  buffers and never creates a real `worker::Env`/bindings/WebSocket pair;
+  that requires the `cloudflare::Application` layer (still native) or full
+  integration tests with `wrangler dev`.

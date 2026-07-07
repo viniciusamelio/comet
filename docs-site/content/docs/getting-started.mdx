@@ -104,7 +104,7 @@ comet generate route Board
 Os dois comandos imprimem as linhas que faltam adicionar manualmente em
 `src/lib.rs` (o `pub mod`) e `src/app.rs` (o `use` e a entrada em
 `routes![...]`) — o CLI nunca edita esses dois arquivos por você, de
-propósito. Veja mais em [comet-cli](/docs/comet-cli).
+propósito. Veja mais em [comet-cli](/pt-BR/docs/comet-cli).
 
 Depois de adicionar as rotas, gere a migration correspondente:
 
@@ -121,7 +121,7 @@ comet test unit
 ## Caminho manual: adicionando `comet` a um projeto Rocket existente
 
 Se você já tem uma aplicação Rocket e só quer rodá-la em Workers, adicione a
-dependência (via Git, pelo motivo explicado na [visão geral](/docs)):
+dependência (via Git, pelo motivo explicado na [visão geral](/pt-BR)):
 
 ```toml
 [dependencies]
@@ -170,15 +170,15 @@ comet = {
 }
 ```
 
-Veja a [matriz completa de features](/docs/cloudflare-adapter#matriz-de-features)
+Veja a [matriz completa de features](/pt-BR/docs/cloudflare-adapter#matriz-de-features)
 no adapter Cloudflare, e as features específicas do ORM em
-[Nebula](/docs/nebula-orm).
+[Nebula](/pt-BR/docs/nebula-orm).
 
 ## Próximos passos
 
-- [Adapter Cloudflare](/docs/cloudflare-adapter) — dispatch, streaming,
+- [Adapter Cloudflare](/pt-BR/docs/cloudflare-adapter) — dispatch, streaming,
   bindings tipados, R2, WebSocket.
-- [Nebula ORM](/docs/nebula-orm) — entidades, query builder, migrations.
-- [comet-cli](/docs/comet-cli) — referência completa de comandos.
-- [Exemplo completo](/docs/example-walkthrough) — uma API de tarefas
+- [Nebula ORM](/pt-BR/docs/nebula-orm) — entidades, query builder, migrations.
+- [comet-cli](/pt-BR/docs/comet-cli) — referência completa de comandos.
+- [Exemplo completo](/pt-BR/docs/example-walkthrough) — uma API de tarefas
   D1-backed com Queues, R2 e WebSocket, ponta a ponta.
