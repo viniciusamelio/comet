@@ -1,6 +1,6 @@
 use comet::nebula::AccessContext;
 
-use crate::{AuthSession, AuthorizationClaims, AuthorizedSession};
+use crate::{AuthSession, AuthorizationClaims, AuthorizedSession, RequiredAuthorization};
 
 pub trait NebulaAccessContextExt {
     fn to_nebula_access_context(&self) -> AccessContext;
@@ -12,13 +12,20 @@ impl NebulaAccessContextExt for AuthSession {
     }
 }
 
-impl<P> NebulaAccessContextExt for AuthorizedSession<P> {
+impl<P: RequiredAuthorization> NebulaAccessContextExt for AuthorizedSession<P> {
     fn to_nebula_access_context(&self) -> AccessContext {
-        self.session
+        let context = self
+            .session
             .to_nebula_access_context()
             .with_roles(self.claims.roles.clone())
             .with_permissions(self.claims.permissions.clone())
-            .with_scopes(self.claims.permissions.clone())
+            .with_scopes(self.claims.permissions.clone());
+
+        if let Some(resource) = P::REQUIREMENT.resource {
+            context.with_resource(resource)
+        } else {
+            context
+        }
     }
 }
 

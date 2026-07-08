@@ -5,7 +5,7 @@ use super::column::{Column, ColumnRef, Expr, Ordering, format_ordering, quote_id
 use super::migration::is_indexed_in_table;
 use super::rls::{
     AccessContext, CustomPredicateProvider, RlsError, authorize_policy, policy_applies,
-    table_has_protected_rls, validate_policy_value_type,
+    require_rls_operation_coverage, table_has_protected_rls, validate_policy_value_type,
 };
 use super::value::Value;
 use super::{RlsOperation, RlsPolicyKind};
@@ -149,6 +149,7 @@ impl<E: Entity> Select<E> {
         context: &AccessContext,
         predicates: &impl CustomPredicateProvider,
     ) -> Result<Self, RlsError> {
+        require_rls_operation_coverage(E::TABLE, RlsOperation::Select)?;
         for policy in E::TABLE
             .rls
             .iter()
@@ -293,6 +294,7 @@ impl<E: Entity> Insert<E> {
         context: &AccessContext,
         predicates: &impl CustomPredicateProvider,
     ) -> Result<Self, RlsError> {
+        require_rls_operation_coverage(E::TABLE, RlsOperation::Insert)?;
         for policy in E::TABLE
             .rls
             .iter()
@@ -464,6 +466,7 @@ impl<E: Entity> Update<E> {
         context: &AccessContext,
         predicates: &impl CustomPredicateProvider,
     ) -> Result<Self, RlsError> {
+        require_rls_operation_coverage(E::TABLE, RlsOperation::Update)?;
         for policy in E::TABLE
             .rls
             .iter()
@@ -606,6 +609,7 @@ impl<E: Entity> Delete<E> {
         context: &AccessContext,
         predicates: &impl CustomPredicateProvider,
     ) -> Result<Self, RlsError> {
+        require_rls_operation_coverage(E::TABLE, RlsOperation::Delete)?;
         for policy in E::TABLE
             .rls
             .iter()

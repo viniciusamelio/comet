@@ -171,6 +171,22 @@ pub(crate) fn table_has_protected_rls(table: TableDef) -> bool {
         .any(|policy| policy.kind != RlsPolicyKind::Public)
 }
 
+pub(crate) fn require_rls_operation_coverage(
+    table: TableDef,
+    operation: RlsOperation,
+) -> Result<(), RlsError> {
+    if table_has_protected_rls(table)
+        && !table
+            .rls
+            .iter()
+            .any(|policy| policy_applies(policy, operation))
+    {
+        return Err(RlsError::Forbidden { table: table.name });
+    }
+
+    Ok(())
+}
+
 pub(crate) fn validate_custom_predicates(
     table: TableDef,
     predicates: &impl CustomPredicateProvider,
@@ -226,11 +242,7 @@ fn authorize_rbac(
     context: &AccessContext,
 ) -> Result<(), RlsError> {
     if let Some(resource) = authorization.resource {
-        if context
-            .resource
-            .as_deref()
-            .is_some_and(|value| value != resource)
-        {
+        if context.resource.as_deref() != Some(resource) {
             return Err(RlsError::Forbidden { table });
         }
     }
