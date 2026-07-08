@@ -4,12 +4,15 @@ mod commands;
 mod discover;
 mod entity_introspect;
 mod fieldspec;
+mod rpc;
 mod rustfile;
 mod schema_dump;
 mod snapshot;
 
 use clap::Parser;
-use cli::{AuthCommand, Command, GenerateCommand, MigrateCommand, RlsCommand, TestCommand};
+use cli::{
+    AuthCommand, Command, GenerateCommand, MigrateCommand, RlsCommand, RpcCommand, TestCommand,
+};
 
 fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
@@ -23,6 +26,7 @@ fn main() -> anyhow::Result<()> {
         Command::Migrate(MigrateCommand::Status(args)) => commands::migrate::status(args),
         Command::Auth(AuthCommand::Init(args)) => commands::auth::init(args),
         Command::Rls(RlsCommand::Status(args)) => commands::rls::status(args),
+        Command::Rpc(RpcCommand::Manifest(args)) => commands::rpc::manifest(args),
         Command::Test(TestCommand::Unit(args)) => commands::test::unit(args),
         Command::Test(TestCommand::Integration(args)) => commands::test::integration(args),
         Command::Test(TestCommand::Perf(args)) => commands::test::perf(args),
