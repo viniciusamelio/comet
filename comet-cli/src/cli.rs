@@ -218,6 +218,7 @@ pub struct RpcGenerateArgs {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum RpcLanguage {
     Ts,
+    Dart,
 }
 
 #[derive(Subcommand)]
