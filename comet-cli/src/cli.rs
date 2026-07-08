@@ -29,6 +29,9 @@ pub enum Command {
     /// Inspect Nebula RLS coverage.
     #[command(subcommand)]
     Rls(RlsCommand),
+    /// Inspect routes and generate typed RPC contracts/clients.
+    #[command(subcommand)]
+    Rpc(RpcCommand),
     /// Run the project's test/release gate.
     #[command(subcommand)]
     Test(TestCommand),
@@ -44,6 +47,12 @@ pub enum AuthCommand {
 pub enum RlsCommand {
     /// Show RLS coverage for discovered Nebula entities.
     Status(RlsStatusArgs),
+}
+
+#[derive(Subcommand)]
+pub enum RpcCommand {
+    /// Emit the discovered RPC manifest as JSON.
+    Manifest(RpcManifestArgs),
 }
 
 #[derive(Args)]
@@ -176,6 +185,17 @@ pub struct RlsStatusArgs {
     /// Declare a custom predicate for specific operations, e.g. can_archive:update,delete.
     #[arg(long = "custom-predicate-rule", value_name = "NAME:OPS")]
     pub custom_predicate_rules: Vec<String>,
+}
+
+#[derive(Args)]
+pub struct RpcManifestArgs {
+    /// Project directory to inspect. Defaults to the current directory.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+
+    /// File to write. Defaults to stdout.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
