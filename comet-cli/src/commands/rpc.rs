@@ -31,7 +31,10 @@ pub fn generate(args: RpcGenerateArgs) -> Result<()> {
     let project_dir = args.path.unwrap_or_else(|| PathBuf::from("."));
     let manifest = rpc::discover_manifest(&project_dir)?;
     let output = match args.lang {
-        RpcLanguage::Ts => rpc::generate_typescript_client(&manifest),
+        RpcLanguage::Ts => {
+            let models = rpc::discover_typescript_models(&project_dir, &manifest)?;
+            rpc::generate_typescript_client_with_models(&manifest, &models)
+        }
     };
 
     match args.out {
