@@ -440,7 +440,9 @@ fn validate_rls_policies(
                 }
             }
             RlsKindAttr::Rbac => {
-                if policy.roles.is_empty() && policy.permissions.is_empty() && policy.scopes.is_empty()
+                if policy.roles.is_empty()
+                    && policy.permissions.is_empty()
+                    && policy.scopes.is_empty()
                 {
                     return Err(syn::Error::new_spanned(
                         ident,
