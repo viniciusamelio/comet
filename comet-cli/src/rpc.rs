@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -7,7 +8,8 @@ use quote::ToTokens;
 use serde::{Deserialize, Serialize};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{FnArg, Item, ItemFn, LitStr, Pat, ReturnType, Token, Type};
+use syn::visit::{self, Visit};
+use syn::{Expr, ExprMethodCall, FnArg, Item, ItemFn, Lit, LitStr, Pat, ReturnType, Token, Type};
 use toml::Value;
 
 const MANIFEST_VERSION: u32 = 1;
@@ -112,6 +114,8 @@ pub fn discover_manifest(project_dir: &Path) -> Result<RpcManifest> {
     let src_dir = project_dir.join("src");
     let mut routes = Vec::new();
     visit_dir(&src_dir, &[], &mut routes)?;
+    let mount_prefixes = discover_mount_prefixes(&src_dir)?;
+    apply_mount_prefixes(&mount_prefixes, &mut routes);
     resolve_authorization_policies(project_dir, &mut routes)?;
     routes.sort_by(|a, b| {
         a.module_path
@@ -124,6 +128,135 @@ pub fn discover_manifest(project_dir: &Path) -> Result<RpcManifest> {
         version: MANIFEST_VERSION,
         routes,
     })
+}
+
+fn discover_mount_prefixes(src_dir: &Path) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut prefixes = BTreeMap::new();
+    visit_mount_dir(src_dir, &mut prefixes)?;
+    Ok(prefixes)
+}
+
+fn visit_mount_dir(dir: &Path, prefixes: &mut BTreeMap<String, Vec<String>>) -> Result<()> {
+    let mut dir_entries = fs::read_dir(dir)
+        .with_context(|| format!("reading directory {}", dir.display()))?
+        .collect::<std::io::Result<Vec<_>>>()
+        .with_context(|| format!("reading directory {}", dir.display()))?;
+    dir_entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in dir_entries {
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("reading file type of {}", path.display()))?;
+
+        if file_type.is_dir() {
+            visit_mount_dir(&path, prefixes)?;
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+            visit_mount_file(&path, prefixes)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn visit_mount_file(path: &Path, prefixes: &mut BTreeMap<String, Vec<String>>) -> Result<()> {
+    let source = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let file = syn::parse_file(&source).with_context(|| format!("parsing {}", path.display()))?;
+    let mut visitor = MountVisitor { prefixes };
+    visitor.visit_file(&file);
+    Ok(())
+}
+
+struct MountVisitor<'a> {
+    prefixes: &'a mut BTreeMap<String, Vec<String>>,
+}
+
+impl<'ast> Visit<'ast> for MountVisitor<'_> {
+    fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
+        if node.method == "mount"
+            && let Some(prefix) = mount_prefix(node)
+        {
+            for route_name in mounted_route_names(node) {
+                self.prefixes
+                    .entry(route_name)
+                    .or_default()
+                    .push(prefix.clone());
+            }
+        }
+
+        visit::visit_expr_method_call(self, node);
+    }
+}
+
+fn mount_prefix(node: &ExprMethodCall) -> Option<String> {
+    let Expr::Lit(expr_lit) = node.args.first()? else {
+        return None;
+    };
+    let Lit::Str(prefix) = &expr_lit.lit else {
+        return None;
+    };
+    Some(prefix.value())
+}
+
+fn mounted_route_names(node: &ExprMethodCall) -> Vec<String> {
+    let Some(Expr::Macro(expr_macro)) = node.args.iter().nth(1) else {
+        return Vec::new();
+    };
+    if !expr_macro
+        .mac
+        .path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "routes")
+    {
+        return Vec::new();
+    }
+
+    expr_macro
+        .mac
+        .parse_body_with(Punctuated::<syn::Path, Token![,]>::parse_terminated)
+        .ok()
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|path| path.segments.last())
+                .map(|segment| segment.ident.to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn apply_mount_prefixes(mount_prefixes: &BTreeMap<String, Vec<String>>, routes: &mut [RpcRoute]) {
+    for route in routes {
+        let Some(prefixes) = mount_prefixes.get(&route.name) else {
+            continue;
+        };
+
+        let unique = prefixes.iter().collect::<std::collections::BTreeSet<_>>();
+        if unique.len() > 1 {
+            route.warnings.push(format!(
+                "route `{}` is mounted at multiple prefixes; leaving local path unchanged",
+                route.name
+            ));
+            continue;
+        }
+
+        if let Some(prefix) = prefixes.first() {
+            route.path = join_mount_path(prefix, &route.path);
+        }
+    }
+}
+
+fn join_mount_path(prefix: &str, route_path: &str) -> String {
+    let prefix = prefix.trim_end_matches('/');
+    let route_path = route_path.trim_start_matches('/');
+
+    match (prefix.is_empty(), route_path.is_empty()) {
+        (true, true) => "/".to_owned(),
+        (true, false) => format!("/{route_path}"),
+        (false, true) => prefix.to_owned(),
+        (false, false) => format!("{prefix}/{route_path}"),
+    }
 }
 
 fn resolve_authorization_policies(project_dir: &Path, routes: &mut [RpcRoute]) -> Result<()> {
@@ -1111,6 +1244,83 @@ mod tests {
         assert_eq!(manifest.routes[0].support, RpcRouteSupport::Raw);
         assert_eq!(manifest.routes[0].path_params[0].name, "key");
         assert!(manifest.routes[0].path_params[0].variadic);
+    }
+
+    #[test]
+    fn applies_mount_prefixes_from_routes_macro() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "src/app.rs",
+            r#"
+            use crate::tasks::routes::list_tasks;
+
+            pub fn rocket() {
+                rocket::build().mount("/api/v1", routes![list_tasks]);
+            }
+            "#,
+        );
+        write(
+            dir.path(),
+            "src/tasks/routes.rs",
+            r#"
+            use rocket::serde::json::Json;
+
+            pub struct Task;
+
+            #[get("/tasks")]
+            pub async fn list_tasks() -> Json<Vec<Task>> {
+                todo!()
+            }
+            "#,
+        );
+
+        let manifest = discover_manifest(dir.path()).unwrap();
+
+        assert_eq!(manifest.routes[0].path, "/api/v1/tasks");
+        assert!(manifest.routes[0].warnings.is_empty());
+    }
+
+    #[test]
+    fn warns_when_route_has_multiple_mount_prefixes() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "src/app.rs",
+            r#"
+            use crate::tasks::routes::list_tasks;
+
+            pub fn rocket() {
+                rocket::build()
+                    .mount("/api", routes![list_tasks])
+                    .mount("/internal", routes![list_tasks]);
+            }
+            "#,
+        );
+        write(
+            dir.path(),
+            "src/tasks/routes.rs",
+            r#"
+            use rocket::serde::json::Json;
+
+            pub struct Task;
+
+            #[get("/tasks")]
+            pub async fn list_tasks() -> Json<Vec<Task>> {
+                todo!()
+            }
+            "#,
+        );
+
+        let manifest = discover_manifest(dir.path()).unwrap();
+
+        assert_eq!(manifest.routes[0].path, "/tasks");
+        assert!(
+            manifest.routes[0]
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("multiple prefixes"))
+        );
     }
 
     #[test]
