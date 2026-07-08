@@ -39,6 +39,10 @@ pub fn generate(args: RpcGenerateArgs) -> Result<()> {
             let types = rpc::discover_typescript_types(&project_dir, &manifest)?;
             rpc::generate_dart_client_with_types(&manifest, &types)
         }
+        RpcLanguage::Rust => {
+            let types = rpc::discover_typescript_types(&project_dir, &manifest)?;
+            rpc::generate_rust_client_with_types(&manifest, &types)
+        }
     };
 
     match args.out {

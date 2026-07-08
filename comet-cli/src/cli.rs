@@ -219,6 +219,7 @@ pub struct RpcGenerateArgs {
 pub enum RpcLanguage {
     Ts,
     Dart,
+    Rust,
 }
 
 #[derive(Subcommand)]
