@@ -1,12 +1,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use quote::ToTokens;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{FnArg, Item, ItemFn, LitStr, Pat, ReturnType, Token, Type};
+use toml::Value;
 
 const MANIFEST_VERSION: u32 = 1;
 
@@ -56,7 +58,7 @@ pub enum RpcAuth {
     },
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthMode {
     All,
@@ -110,6 +112,7 @@ pub fn discover_manifest(project_dir: &Path) -> Result<RpcManifest> {
     let src_dir = project_dir.join("src");
     let mut routes = Vec::new();
     visit_dir(&src_dir, &[], &mut routes)?;
+    resolve_authorization_policies(project_dir, &mut routes)?;
     routes.sort_by(|a, b| {
         a.module_path
             .cmp(&b.module_path)
@@ -121,6 +124,357 @@ pub fn discover_manifest(project_dir: &Path) -> Result<RpcManifest> {
         version: MANIFEST_VERSION,
         routes,
     })
+}
+
+fn resolve_authorization_policies(project_dir: &Path, routes: &mut [RpcRoute]) -> Result<()> {
+    let pending = routes
+        .iter()
+        .filter_map(|route| {
+            let RpcAuth::Authorized {
+                policy: Some(policy),
+                roles,
+                permissions,
+                scopes,
+                ..
+            } = &route.auth
+            else {
+                return None;
+            };
+
+            if !roles.is_empty() || !permissions.is_empty() || !scopes.is_empty() {
+                return None;
+            }
+
+            Some(PolicyRef {
+                display: policy.clone(),
+                path: String::new(),
+                module_path: route.module_path.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    if !project_dir.join("Cargo.toml").exists() {
+        for route in routes {
+            if let RpcAuth::Authorized {
+                policy: Some(policy),
+                roles,
+                permissions,
+                scopes,
+                ..
+            } = &route.auth
+                && roles.is_empty()
+                && permissions.is_empty()
+                && scopes.is_empty()
+            {
+                route.warnings.push(format!(
+                    "authorization policy `{policy}` was not resolved because the project has no Cargo.toml"
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    let project = RustProject::read(project_dir)?;
+    let policy_refs = pending
+        .into_iter()
+        .map(|policy_ref| PolicyRef {
+            path: policy_path(
+                &policy_ref.display,
+                &policy_ref.module_path,
+                &project.crate_name,
+            ),
+            ..policy_ref
+        })
+        .collect::<Vec<_>>();
+    let requirements = dump_authorization_requirements(&project, &policy_refs)?;
+
+    for route in routes {
+        let RpcAuth::Authorized {
+            policy: Some(policy),
+            roles,
+            permissions,
+            scopes,
+            resource,
+            mode,
+        } = &mut route.auth
+        else {
+            continue;
+        };
+
+        if !roles.is_empty() || !permissions.is_empty() || !scopes.is_empty() {
+            continue;
+        }
+
+        let path = policy_path(policy, &route.module_path, &project.crate_name);
+        if let Some(requirement) = requirements.iter().find(|entry| entry.path == path) {
+            *roles = requirement.roles.clone();
+            *permissions = requirement.permissions.clone();
+            *scopes = requirement.scopes.clone();
+            *resource = requirement.resource.clone();
+            *mode = requirement.mode.clone();
+        } else {
+            route.warnings.push(format!(
+                "authorization policy `{policy}` could not be resolved"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PolicyRef {
+    display: String,
+    path: String,
+    module_path: Vec<String>,
+}
+
+#[derive(Debug)]
+struct RustProject {
+    dir: PathBuf,
+    package_name: String,
+    crate_name: String,
+    comet_auth_dependency: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct AuthorizationRequirementDump {
+    path: String,
+    mode: AuthMode,
+    roles: Vec<String>,
+    permissions: Vec<String>,
+    scopes: Vec<String>,
+    resource: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for AuthMode {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "all" => Ok(Self::All),
+            "any" => Ok(Self::Any),
+            other => Err(serde::de::Error::custom(format!(
+                "unsupported authorization mode `{other}`"
+            ))),
+        }
+    }
+}
+
+impl RustProject {
+    fn read(project_dir: &Path) -> Result<Self> {
+        let dir = project_dir
+            .canonicalize()
+            .with_context(|| format!("resolving {}", project_dir.display()))?;
+        let cargo_toml_path = dir.join("Cargo.toml");
+        let cargo_toml_text = fs::read_to_string(&cargo_toml_path)
+            .with_context(|| format!("reading {}", cargo_toml_path.display()))?;
+        let root: Value = toml::from_str(&cargo_toml_text)
+            .with_context(|| format!("parsing {}", cargo_toml_path.display()))?;
+
+        let package_name = root
+            .get("package")
+            .and_then(|package| package.get("name"))
+            .and_then(Value::as_str)
+            .with_context(|| format!("{} has no [package].name", cargo_toml_path.display()))?
+            .to_owned();
+        let crate_name = package_name.replace('-', "_");
+
+        let comet_auth_dependency = root
+            .get("dependencies")
+            .and_then(|deps| deps.get("comet-auth"))
+            .with_context(|| {
+                format!(
+                    "{} has no [dependencies].comet-auth entry",
+                    cargo_toml_path.display()
+                )
+            })?
+            .clone();
+        let mut comet_auth_dependency = dependency_as_table(&comet_auth_dependency)?;
+        resolve_relative_path(&mut comet_auth_dependency, &dir)?;
+
+        Ok(Self {
+            dir,
+            package_name,
+            crate_name,
+            comet_auth_dependency,
+        })
+    }
+}
+
+fn dump_authorization_requirements(
+    project: &RustProject,
+    policy_refs: &[PolicyRef],
+) -> Result<Vec<AuthorizationRequirementDump>> {
+    if policy_refs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut policy_refs = policy_refs.to_vec();
+    policy_refs.sort();
+    policy_refs.dedup_by(|a, b| a.path == b.path);
+
+    let temp_dir = tempfile::tempdir().context("creating rpc-dump temp directory")?;
+    fs::write(
+        temp_dir.path().join("Cargo.toml"),
+        build_rpc_dump_manifest(project)?,
+    )
+    .context("writing rpc-dump Cargo.toml")?;
+    fs::create_dir_all(temp_dir.path().join("src")).context("creating rpc-dump src/")?;
+    fs::write(
+        temp_dir.path().join("src/main.rs"),
+        render_auth_dump_main_rs(&policy_refs),
+    )
+    .context("writing rpc-dump main.rs")?;
+
+    let output = Command::new("cargo")
+        .arg("run")
+        .arg("--quiet")
+        .current_dir(temp_dir.path())
+        .output()
+        .context("running cargo for the rpc-dump crate")?;
+
+    if !output.status.success() {
+        bail!(
+            "RPC authorization policy dump failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let json =
+        String::from_utf8(output.stdout).context("RPC authorization dump produced non-UTF8")?;
+    serde_json::from_str(&json).context("parsing RPC authorization dump JSON")
+}
+
+fn build_rpc_dump_manifest(project: &RustProject) -> Result<String> {
+    let mut target_dependency = toml::Table::new();
+    target_dependency.insert(
+        "path".to_owned(),
+        Value::String(project.dir.display().to_string()),
+    );
+
+    let mut dependencies = toml::Table::new();
+    dependencies.insert(
+        project.package_name.clone(),
+        Value::Table(target_dependency),
+    );
+    dependencies.insert(
+        "comet-auth".to_owned(),
+        project.comet_auth_dependency.clone(),
+    );
+    dependencies.insert("serde_json".to_owned(), Value::String("1".to_owned()));
+
+    let mut package = toml::Table::new();
+    package.insert(
+        "name".to_owned(),
+        Value::String("comet-rpc-dump".to_owned()),
+    );
+    package.insert("version".to_owned(), Value::String("0.0.0".to_owned()));
+    package.insert("edition".to_owned(), Value::String("2021".to_owned()));
+    package.insert("publish".to_owned(), Value::Boolean(false));
+
+    let mut root = toml::Table::new();
+    root.insert("package".to_owned(), Value::Table(package));
+    root.insert("dependencies".to_owned(), Value::Table(dependencies));
+
+    toml::to_string_pretty(&Value::Table(root)).context("rendering rpc-dump Cargo.toml")
+}
+
+fn render_auth_dump_main_rs(policy_refs: &[PolicyRef]) -> String {
+    let entries = policy_refs
+        .iter()
+        .map(|policy_ref| {
+            let path = &policy_ref.path;
+            format!(
+                "    {{\n\
+                 \x20       let requirement = <{path} as ::comet_auth::RequiredAuthorization>::REQUIREMENT;\n\
+                 \x20       values.push(::serde_json::json!({{\n\
+                 \x20           \"path\": \"{path}\",\n\
+                 \x20           \"mode\": match requirement.mode {{\n\
+                 \x20               ::comet_auth::AuthorizationMode::All => \"all\",\n\
+                 \x20               ::comet_auth::AuthorizationMode::Any => \"any\",\n\
+                 \x20           }},\n\
+                 \x20           \"roles\": requirement.roles,\n\
+                 \x20           \"permissions\": requirement.permissions,\n\
+                 \x20           \"scopes\": requirement.scopes,\n\
+                 \x20           \"resource\": requirement.resource,\n\
+                 \x20       }}));\n\
+                 \x20   }}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        "fn main() {{\n\
+         \x20   let mut values = Vec::new();\n\
+         {entries}\n\
+         \x20   print!(\"{{}}\", ::serde_json::to_string(&values).unwrap());\n\
+         }}\n"
+    )
+}
+
+fn dependency_as_table(dependency: &Value) -> Result<Value> {
+    match dependency {
+        Value::String(version) => {
+            let mut table = toml::Table::new();
+            table.insert("version".to_owned(), Value::String(version.clone()));
+            Ok(Value::Table(table))
+        }
+        Value::Table(table) => Ok(Value::Table(table.clone())),
+        other => bail!("unsupported dependency format in Cargo.toml: {other:?}"),
+    }
+}
+
+fn resolve_relative_path(dependency: &mut Value, base_dir: &Path) -> Result<()> {
+    let Value::Table(table) = dependency else {
+        return Ok(());
+    };
+    let Some(Value::String(path_str)) = table.get("path").cloned() else {
+        return Ok(());
+    };
+
+    let path = Path::new(&path_str);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base_dir.join(path)
+    };
+    let absolute = absolute
+        .canonicalize()
+        .with_context(|| format!("resolving path dependency {}", absolute.display()))?;
+
+    table.insert(
+        "path".to_owned(),
+        Value::String(absolute.display().to_string()),
+    );
+    Ok(())
+}
+
+fn policy_path(policy: &str, module_path: &[String], crate_name: &str) -> String {
+    if let Some(rest) = policy.strip_prefix("crate ::") {
+        return format!("{crate_name}::{rest}").replace(" :: ", "::");
+    }
+    if let Some(rest) = policy.strip_prefix("crate::") {
+        return format!("{crate_name}::{rest}");
+    }
+    if policy.starts_with("::") {
+        return policy.trim_start_matches("::").replace(" :: ", "::");
+    }
+    if policy.contains("::") || policy.contains(" :: ") {
+        return policy.replace(" :: ", "::");
+    }
+
+    let mut segments = vec![crate_name.to_owned()];
+    segments.extend(module_path.iter().cloned());
+    segments.push(policy.to_owned());
+    segments.join("::")
 }
 
 fn visit_dir(dir: &Path, module_path: &[String], routes: &mut Vec<RpcRoute>) -> Result<()> {
@@ -757,5 +1111,83 @@ mod tests {
         assert_eq!(manifest.routes[0].support, RpcRouteSupport::Raw);
         assert_eq!(manifest.routes[0].path_params[0].name, "key");
         assert!(manifest.routes[0].path_params[0].variadic);
+    }
+
+    #[test]
+    fn resolves_required_authorization_policy_from_target_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let comet_auth_path = workspace.join("comet-auth");
+        let rocket_path = workspace.join("vendor/rocket/core/lib");
+
+        write(
+            dir.path(),
+            "Cargo.toml",
+            &format!(
+                r#"
+                [package]
+                name = "rpc-policy-fixture"
+                version = "0.0.0"
+                edition = "2021"
+
+                [dependencies]
+                comet-auth = {{ path = "{}", default-features = false }}
+                rocket = {{ path = "{}", default-features = false, features = ["json"] }}
+                "#,
+                comet_auth_path.display(),
+                rocket_path.display(),
+            ),
+        );
+        write(dir.path(), "src/lib.rs", "pub mod routes;\n");
+        write(
+            dir.path(),
+            "src/routes.rs",
+            r#"
+            use comet_auth::{
+                AuthorizationMode, AuthorizationRequirement, AuthorizedSession,
+                RequiredAuthorization,
+            };
+
+            pub struct WritePolicy;
+
+            impl RequiredAuthorization for WritePolicy {
+                const REQUIREMENT: AuthorizationRequirement =
+                    AuthorizationRequirement::with_mode_and_resource(
+                        AuthorizationMode::Any,
+                        &["admin"],
+                        &["tasks:write"],
+                        &["tasks:review"],
+                        Some("tasks"),
+                    );
+            }
+
+            #[rocket::post("/write")]
+            pub async fn write(_session: AuthorizedSession<WritePolicy>) -> &'static str {
+                "ok"
+            }
+            "#,
+        );
+
+        let manifest = discover_manifest(dir.path()).unwrap();
+        let RpcAuth::Authorized {
+            roles,
+            permissions,
+            scopes,
+            resource,
+            mode,
+            ..
+        } = &manifest.routes[0].auth
+        else {
+            panic!("expected authorized route");
+        };
+
+        assert_eq!(roles, &vec!["admin".to_owned()]);
+        assert_eq!(permissions, &vec!["tasks:write".to_owned()]);
+        assert_eq!(scopes, &vec!["tasks:review".to_owned()]);
+        assert_eq!(resource, &Some("tasks".to_owned()));
+        assert_eq!(mode, &AuthMode::Any);
     }
 }
