@@ -8,7 +8,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 comet = { path = "../..", default-features = false, features = ["cloudflare", "cloudflare-d1", "cloudflare-queue", "cloudflare-r2", "cloudflare-websocket", "nebula", "nebula-d1"] }
-comet-auth = { path = "../../comet-auth", default-features = false, features = ["cloudflare", "macros"] }
+comet-auth = { path = "../../comet-auth", default-features = false, features = ["cloudflare", "macros", "nebula"] }
 console_error_panic_hook = "0.1.7"
 rocket = { path = "../../vendor/rocket/core/lib", default-features = false, features = ["json", "worker"] }
 wasm-bindgen = "0.2"

@@ -89,6 +89,7 @@ mod tests {
                 columns: Vec::new(),
                 indexes: Vec::new(),
                 foreign_keys: Vec::new(),
+                rls: Vec::new(),
             }],
         };
 

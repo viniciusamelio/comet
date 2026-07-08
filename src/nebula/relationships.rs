@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use super::Entity;
 use super::column::Column;
 use super::query::Select;
+use super::rls::{AccessContext, CustomPredicateProvider, NoCustomPredicates, RlsError};
 use super::value::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +45,30 @@ where
             .where_(self.foreign_column().eq(local_value))
             .limit(1)
     }
+
+    pub fn select_parent_scoped<V>(
+        &self,
+        local_value: V,
+        context: &AccessContext,
+    ) -> Result<Select<Parent>, RlsError>
+    where
+        V: Into<Value>,
+    {
+        self.select_parent_scoped_with(local_value, context, &NoCustomPredicates)
+    }
+
+    pub fn select_parent_scoped_with<V>(
+        &self,
+        local_value: V,
+        context: &AccessContext,
+        predicates: &impl CustomPredicateProvider,
+    ) -> Result<Select<Parent>, RlsError>
+    where
+        V: Into<Value>,
+    {
+        self.select_parent(local_value)
+            .apply_rls(context, predicates)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +107,30 @@ where
         V: Into<Value>,
     {
         Child::select().where_(self.child_column().eq(parent_value))
+    }
+
+    pub fn select_children_scoped<V>(
+        &self,
+        parent_value: V,
+        context: &AccessContext,
+    ) -> Result<Select<Child>, RlsError>
+    where
+        V: Into<Value>,
+    {
+        self.select_children_scoped_with(parent_value, context, &NoCustomPredicates)
+    }
+
+    pub fn select_children_scoped_with<V>(
+        &self,
+        parent_value: V,
+        context: &AccessContext,
+        predicates: &impl CustomPredicateProvider,
+    ) -> Result<Select<Child>, RlsError>
+    where
+        V: Into<Value>,
+    {
+        self.select_children(parent_value)
+            .apply_rls(context, predicates)
     }
 }
 

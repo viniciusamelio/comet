@@ -1,11 +1,12 @@
 use comet::nebula::{belongs_to, has_many, BelongsTo, HasMany};
-use rocket::serde::Deserialize;
+use rocket::serde::{Deserialize, Serialize};
 
 use crate::boards::board_task::BoardTaskRow;
 use crate::orgs::model::OrgRow;
 
-#[derive(Debug, Clone, Deserialize, comet::nebula::Entity)]
+#[derive(Debug, Clone, Deserialize, Serialize, comet::nebula::Entity)]
 #[nebula(table = "boards")]
+#[nebula(rls(tenant = "org_id"))]
 #[serde(crate = "rocket::serde")]
 pub struct BoardRow {
     #[nebula(primary_key, auto, unique, index)]

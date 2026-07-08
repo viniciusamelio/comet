@@ -5,6 +5,7 @@ use crate::orgs::model::OrgRow;
 
 #[derive(Debug, Clone, Deserialize, comet::nebula::Entity)]
 #[nebula(table = "users")]
+#[nebula(rls(tenant = "org_id"))]
 #[serde(crate = "rocket::serde")]
 pub struct UserRow {
     #[nebula(primary_key, auto, unique, index)]

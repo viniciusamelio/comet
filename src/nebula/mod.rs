@@ -14,6 +14,18 @@ pub enum SqlType {
 }
 
 impl SqlType {
+    pub const fn name(self) -> &'static str {
+        match self {
+            SqlType::Integer => "INTEGER",
+            SqlType::Real => "REAL",
+            SqlType::Text => "TEXT",
+            SqlType::Blob => "BLOB",
+            SqlType::Boolean => "BOOLEAN",
+        }
+    }
+}
+
+impl SqlType {
     pub const fn as_sql(self) -> &'static str {
         match self {
             SqlType::Integer => "INTEGER",
@@ -67,11 +79,89 @@ pub struct ForeignKeyDef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "nebula-schema",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub enum RlsOperation {
+    Select,
+    Insert,
+    Update,
+    Delete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "nebula-schema",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub enum RlsPolicyKind {
+    Public,
+    Owner,
+    Tenant,
+    Rbac,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "nebula-schema",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub enum RlsMatchMode {
+    All,
+    Any,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RlsAuthorizationDef {
+    pub mode: RlsMatchMode,
+    pub roles: &'static [&'static str],
+    pub permissions: &'static [&'static str],
+    pub scopes: &'static [&'static str],
+    pub resource: Option<&'static str>,
+}
+
+impl RlsAuthorizationDef {
+    pub const fn empty() -> Self {
+        Self {
+            mode: RlsMatchMode::All,
+            roles: &[],
+            permissions: &[],
+            scopes: &[],
+            resource: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RlsPolicyDef {
+    pub operations: &'static [RlsOperation],
+    pub kind: RlsPolicyKind,
+    pub column: Option<&'static str>,
+    pub authorization: RlsAuthorizationDef,
+    pub custom: Option<&'static str>,
+}
+
+impl RlsPolicyDef {
+    pub const fn public() -> Self {
+        Self {
+            operations: &[],
+            kind: RlsPolicyKind::Public,
+            column: None,
+            authorization: RlsAuthorizationDef::empty(),
+            custom: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableDef {
     pub name: &'static str,
     pub columns: &'static [ColumnDef],
     pub indexes: &'static [IndexDef],
     pub foreign_keys: &'static [ForeignKeyDef],
+    pub rls: &'static [RlsPolicyDef],
 }
 
 pub trait Entity {
@@ -104,20 +194,104 @@ pub trait Entity {
     {
         Delete::new()
     }
+
+    fn validate_custom_predicates_with(
+        predicates: &impl CustomPredicateProvider,
+    ) -> Result<(), RlsError>
+    where
+        Self: Sized,
+    {
+        rls::validate_custom_predicates(Self::TABLE, predicates)
+    }
+
+    fn select_scoped(context: &AccessContext) -> Result<Select<Self>, RlsError>
+    where
+        Self: Sized,
+    {
+        Self::select().apply_rls(context, &NoCustomPredicates)
+    }
+
+    fn select_scoped_with(
+        context: &AccessContext,
+        predicates: &impl CustomPredicateProvider,
+    ) -> Result<Select<Self>, RlsError>
+    where
+        Self: Sized,
+    {
+        Self::select().apply_rls(context, predicates)
+    }
+
+    fn insert_scoped(context: &AccessContext) -> Result<Insert<Self>, RlsError>
+    where
+        Self: Sized,
+    {
+        Self::insert().apply_rls(context, &NoCustomPredicates)
+    }
+
+    fn insert_scoped_with(
+        context: &AccessContext,
+        predicates: &impl CustomPredicateProvider,
+    ) -> Result<Insert<Self>, RlsError>
+    where
+        Self: Sized,
+    {
+        Self::insert().apply_rls(context, predicates)
+    }
+
+    fn update_scoped(context: &AccessContext) -> Result<Update<Self>, RlsError>
+    where
+        Self: Sized,
+    {
+        Self::update().apply_rls(context, &NoCustomPredicates)
+    }
+
+    fn update_scoped_with(
+        context: &AccessContext,
+        predicates: &impl CustomPredicateProvider,
+    ) -> Result<Update<Self>, RlsError>
+    where
+        Self: Sized,
+    {
+        Self::update().apply_rls(context, predicates)
+    }
+
+    fn delete_scoped(context: &AccessContext) -> Result<Delete<Self>, RlsError>
+    where
+        Self: Sized,
+    {
+        Self::delete().apply_rls(context, &NoCustomPredicates)
+    }
+
+    fn delete_scoped_with(
+        context: &AccessContext,
+        predicates: &impl CustomPredicateProvider,
+    ) -> Result<Delete<Self>, RlsError>
+    where
+        Self: Sized,
+    {
+        Self::delete().apply_rls(context, predicates)
+    }
 }
 
 mod column;
 mod migration;
 mod query;
 mod relationships;
+mod rls;
 mod value;
 
 pub use column::{Column, ColumnRef, Direction, Expr, Ordering};
 pub use migration::{
     MigrationBlocker, MigrationPlan, MigrationWriteError, SchemaLint, SchemaManifest,
 };
-pub use query::{Delete, Insert, QueryLint, Select, Statement, Update};
+pub use query::{
+    Delete, Insert, QueryCheckError, QueryLint, QueryLintSeverity, Select, Statement, Update,
+};
 pub use relationships::{BelongsTo, HasMany, belongs_to, has_many};
+pub use rls::{
+    AccessContext, CustomPredicateProvider, CustomPredicateRegistration, NoCustomPredicates,
+    RlsError,
+};
 pub use value::Value;
 
 #[cfg(feature = "nebula-d1")]

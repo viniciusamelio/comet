@@ -11,6 +11,7 @@ default = ["native-client", "macros"]
 cloudflare = ["dep:comet", "dep:worker"]
 macros = ["dep:comet-auth-macros"]
 native-client = []
+nebula = ["dep:comet", "comet/nebula"]
 
 [dependencies]
 base64ct = { version = "1", features = ["alloc"] }

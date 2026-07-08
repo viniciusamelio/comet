@@ -1,0 +1,5 @@
+error: Nebula `rls(public)` cannot include operations, columns, authorization, resource, or custom predicates
+ --> tests/ui/nebula_derive_rls_public_with_operation.rs:4:8
+  |
+4 | struct Task {
+  |        ^^^^

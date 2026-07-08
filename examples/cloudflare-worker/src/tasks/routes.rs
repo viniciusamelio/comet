@@ -1,11 +1,18 @@
 use comet::cloudflare::{BindingName, QueueBinding, D1};
-use comet::nebula::Entity;
+use comet::nebula::{
+    AccessContext, CustomPredicateProvider, CustomPredicateRegistration, Entity, Expr, RlsError,
+    RlsOperation,
+};
+use comet_auth::{
+    AuthSession, AuthorizationMode, AuthorizationRequirement, AuthorizedSession,
+    NebulaAccessContextExt, RequiredAuthorization,
+};
 use rocket::serde::json::Json;
 
 use crate::tasks::error::{ApiError, ApiResult};
 use crate::tasks::model::{NewTask, Task, TaskEvent, TaskEventKind, TaskRow};
 
-const TASK_COLUMNS: &[&str] = &["id", "title", "done", "created_at"];
+const TASK_COLUMNS: &[&str] = &["id", "user_id", "title", "done", "created_at"];
 
 pub struct DB;
 
@@ -17,6 +24,43 @@ pub struct TaskEvents;
 
 impl BindingName for TaskEvents {
     const NAME: &'static str = "TASK_EVENTS";
+}
+
+pub struct TaskWritePolicy;
+
+impl RequiredAuthorization for TaskWritePolicy {
+    const REQUIREMENT: AuthorizationRequirement = AuthorizationRequirement::with_mode_and_resource(
+        AuthorizationMode::All,
+        &[],
+        &["tasks:write"],
+        &[],
+        None,
+    );
+}
+
+struct CompleteTaskPredicates;
+
+impl CustomPredicateProvider for CompleteTaskPredicates {
+    fn predicate(
+        &self,
+        table: &'static str,
+        name: &'static str,
+        _operation: RlsOperation,
+        _context: &AccessContext,
+    ) -> Result<Expr, RlsError> {
+        if table == TaskRow::TABLE.name && name == "can_complete_task" {
+            Ok(TaskRow::DONE.eq(0))
+        } else {
+            Err(RlsError::MissingCustomPredicate { table, name })
+        }
+    }
+
+    fn registered_predicate_rules(&self) -> &'static [CustomPredicateRegistration] {
+        &[CustomPredicateRegistration {
+            name: "can_complete_task",
+            operations: &[RlsOperation::Update],
+        }]
+    }
 }
 
 async fn publish_task_event(
@@ -31,9 +75,12 @@ async fn publish_task_event(
 }
 
 #[get("/tasks")]
-pub async fn list_tasks(db: D1<DB>) -> ApiResult<Json<Vec<Task>>> {
-    let rows = TaskRow::select()
+pub async fn list_tasks(session: AuthSession, db: D1<DB>) -> ApiResult<Json<Vec<Task>>> {
+    let context = session.to_nebula_access_context();
+    let rows = TaskRow::select_scoped(&context)
+        .map_err(ApiError::from)?
         .order_by(TaskRow::ID.asc())
+        .limit(100)
         .to_statement()
         .fetch_all_d1(&db)
         .await
@@ -45,9 +92,12 @@ pub async fn list_tasks(db: D1<DB>) -> ApiResult<Json<Vec<Task>>> {
 }
 
 #[get("/tasks/<id>")]
-pub async fn get_task(id: i32, db: D1<DB>) -> ApiResult<Json<Task>> {
-    let row = TaskRow::select()
+pub async fn get_task(id: i32, session: AuthSession, db: D1<DB>) -> ApiResult<Json<Task>> {
+    let context = session.to_nebula_access_context();
+    let row = TaskRow::select_scoped(&context)
+        .map_err(ApiError::from)?
         .where_(TaskRow::ID.eq(id))
+        .limit(1)
         .to_statement()
         .fetch_optional_d1::<TaskRow>(&db)
         .await
@@ -60,14 +110,17 @@ pub async fn get_task(id: i32, db: D1<DB>) -> ApiResult<Json<Task>> {
 #[post("/tasks", data = "<new_task>")]
 pub async fn create_task(
     new_task: Json<NewTask>,
+    session: AuthSession,
     db: D1<DB>,
     queue: QueueBinding<TaskEvents>,
 ) -> ApiResult<Json<Task>> {
+    let context = session.to_nebula_access_context();
     let title = new_task
         .validated_title()
         .map_err(|message| ApiError::BadRequest(message.to_string()))?;
 
-    let row = TaskRow::insert()
+    let row = TaskRow::insert_scoped(&context)
+        .map_err(ApiError::from)?
         .set(TaskRow::TITLE, title)
         .returning(TASK_COLUMNS.iter().copied())
         .to_statement()
@@ -84,10 +137,14 @@ pub async fn create_task(
 #[post("/tasks/<id>/complete")]
 pub async fn complete_task(
     id: i32,
+    session: AuthorizedSession<TaskWritePolicy>,
     db: D1<DB>,
     queue: QueueBinding<TaskEvents>,
 ) -> ApiResult<Json<Task>> {
-    let row = TaskRow::update()
+    let context = session.to_nebula_access_context();
+    TaskRow::validate_custom_predicates_with(&CompleteTaskPredicates).map_err(ApiError::from)?;
+    let row = TaskRow::update_scoped_with(&context, &CompleteTaskPredicates)
+        .map_err(ApiError::from)?
         .set(TaskRow::DONE, 1)
         .where_(TaskRow::ID.eq(id))
         .returning(TASK_COLUMNS.iter().copied())
