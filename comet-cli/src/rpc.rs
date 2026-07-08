@@ -32,6 +32,7 @@ pub struct RpcRoute {
     pub path: String,
     pub data_param: Option<String>,
     pub path_params: Vec<RpcParam>,
+    pub query_params: Vec<RpcParam>,
     pub body: Option<String>,
     pub response: Option<String>,
     pub error: Option<String>,
@@ -784,6 +785,7 @@ fn render_typescript_method(route: &RpcRoute) -> String {
     let mut params = route
         .path_params
         .iter()
+        .chain(route.query_params.iter())
         .map(|param| {
             let ts_type = if param.variadic {
                 "string | number | Array<string | number>".to_owned()
@@ -830,6 +832,20 @@ fn typescript_path_template(route: &RpcRoute) -> String {
             format!("<{}>", param.name)
         };
         path = path.replace(&placeholder, &format!("${{encodePathValue({ident})}}"));
+    }
+
+    if !route.query_params.is_empty() {
+        let query = route
+            .query_params
+            .iter()
+            .map(|param| {
+                let ident = sanitize_ts_identifier(&param.name);
+                format!("{}=${{encodeURIComponent(String({ident}))}}", param.name)
+            })
+            .collect::<Vec<_>>()
+            .join("&");
+        path.push('?');
+        path.push_str(&query);
     }
 
     format!("`{}`", path.replace('`', "\\`"))
@@ -1001,6 +1017,7 @@ fn render_dart_method(route: &RpcRoute) -> String {
     let mut params = route
         .path_params
         .iter()
+        .chain(route.query_params.iter())
         .map(|param| {
             let dart_type = if param.variadic {
                 "List<Object>".to_owned()
@@ -1048,6 +1065,19 @@ fn dart_path_template(route: &RpcRoute) -> String {
             format!("<{}>", param.name)
         };
         path = path.replace(&placeholder, &format!("${{_encodePathValue({ident})}}"));
+    }
+    if !route.query_params.is_empty() {
+        let query = route
+            .query_params
+            .iter()
+            .map(|param| {
+                let ident = sanitize_dart_identifier(&param.name);
+                format!("{}=${{Uri.encodeQueryComponent('${ident}')}}", param.name)
+            })
+            .collect::<Vec<_>>()
+            .join("&");
+        path.push('?');
+        path.push_str(&query);
     }
     format!("'{path}'")
 }
@@ -1190,6 +1220,7 @@ fn render_rust_method(route: &RpcRoute) -> String {
     let mut params = route
         .path_params
         .iter()
+        .chain(route.query_params.iter())
         .map(|param| {
             let rust_type = if param.variadic {
                 "impl IntoIterator<Item = impl ToString>".to_owned()
@@ -1232,7 +1263,7 @@ fn render_rust_method(route: &RpcRoute) -> String {
 }
 
 fn rust_path_expr(route: &RpcRoute) -> String {
-    if route.path_params.is_empty() {
+    if route.path_params.is_empty() && route.query_params.is_empty() {
         return format!("{:?}.to_owned()", route.path);
     }
 
@@ -1253,6 +1284,21 @@ fn rust_path_expr(route: &RpcRoute) -> String {
         } else {
             args.push(format!("encode_path_value({ident})"));
         }
+    }
+
+    if !route.query_params.is_empty() {
+        let query = route
+            .query_params
+            .iter()
+            .map(|param| {
+                let ident = sanitize_rust_identifier(&param.name);
+                args.push(format!("encode_path_value({ident})"));
+                format!("{}={{}}", param.name)
+            })
+            .collect::<Vec<_>>()
+            .join("&");
+        format_string.push('?');
+        format_string.push_str(&query);
     }
 
     format!("format!({:?}, {})", format_string, args.join(", "))
@@ -1942,7 +1988,9 @@ fn route_from_fn(
 ) -> RpcRoute {
     let mut warnings = Vec::new();
     let inputs = route_inputs(item_fn);
-    let path_params = discover_path_params(&route_attr.path, &inputs, &mut warnings);
+    let (http_path, query_placeholders) = split_route_path_and_query(&route_attr.path);
+    let path_params = discover_path_params(&http_path, &inputs, &mut warnings);
+    let query_params = discover_query_params(&query_placeholders, &inputs, &mut warnings);
     let body = route_attr
         .data_param
         .as_deref()
@@ -1970,9 +2018,10 @@ fn route_from_fn(
         module_path: module_path.to_vec(),
         source: path.display().to_string(),
         method: route_attr.method,
-        path: route_attr.path,
+        path: http_path,
         data_param: route_attr.data_param,
         path_params,
+        query_params,
         body,
         response,
         error,
@@ -2035,6 +2084,47 @@ fn discover_path_params(
         }
     }
     params
+}
+
+fn split_route_path_and_query(path: &str) -> (String, Vec<String>) {
+    let Some((path, query)) = path.split_once('?') else {
+        return (path.to_owned(), Vec::new());
+    };
+
+    let placeholders = query
+        .split('&')
+        .filter_map(|segment| {
+            let raw = segment.trim();
+            raw.strip_prefix('<')
+                .and_then(|value| value.strip_suffix('>'))
+                .map(str::to_owned)
+        })
+        .collect();
+
+    (path.to_owned(), placeholders)
+}
+
+fn discover_query_params(
+    placeholders: &[String],
+    inputs: &[RouteInput],
+    warnings: &mut Vec<String>,
+) -> Vec<RpcParam> {
+    placeholders
+        .iter()
+        .filter_map(
+            |name| match inputs.iter().find(|input| input.name == *name) {
+                Some(input) => Some(RpcParam {
+                    name: name.clone(),
+                    rust_type: input.rust_type.clone(),
+                    variadic: false,
+                }),
+                None => {
+                    warnings.push(format!("query parameter `{name}` has no matching argument"));
+                    None
+                }
+            },
+        )
+        .collect()
 }
 
 fn response_and_error(item_fn: &ItemFn) -> (Option<String>, Option<String>) {
@@ -2577,6 +2667,7 @@ mod tests {
                         rust_type: "i32".to_owned(),
                         variadic: false,
                     }],
+                    query_params: Vec::new(),
                     body: None,
                     response: Some("Task".to_owned()),
                     error: None,
@@ -2596,6 +2687,7 @@ mod tests {
                         rust_type: "PathBuf".to_owned(),
                         variadic: true,
                     }],
+                    query_params: Vec::new(),
                     body: None,
                     response: None,
                     error: None,
@@ -2627,6 +2719,56 @@ mod tests {
         assert!(ts.contains("`/api/tasks/${encodePathValue(id)}`"));
         assert!(ts.contains("this.request<Task>(\"GET\""));
         assert!(!ts.contains("putAsset"));
+    }
+
+    #[test]
+    fn discovers_and_generates_query_params() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "src/tasks/routes.rs",
+            r#"
+            use rocket::serde::json::Json;
+
+            pub struct Task;
+
+            #[get("/tasks?<done>&<page>")]
+            pub async fn list_tasks(done: bool, page: i32) -> Json<Vec<Task>> {
+                todo!()
+            }
+            "#,
+        );
+
+        let manifest = discover_manifest(dir.path()).unwrap();
+        let route = &manifest.routes[0];
+        assert_eq!(route.path, "/tasks");
+        assert_eq!(
+            route.query_params,
+            vec![
+                RpcParam {
+                    name: "done".to_owned(),
+                    rust_type: "bool".to_owned(),
+                    variadic: false,
+                },
+                RpcParam {
+                    name: "page".to_owned(),
+                    rust_type: "i32".to_owned(),
+                    variadic: false,
+                },
+            ]
+        );
+
+        let types = TsTypes::default();
+        let ts = generate_typescript_client_with_types(&manifest, &types);
+        let dart = generate_dart_client_with_types(&manifest, &types);
+        let rust = generate_rust_client_with_types(&manifest, &types);
+
+        assert!(ts.contains("async listTasks(done: boolean, page: number)"));
+        assert!(ts.contains("`/tasks?done=${encodeURIComponent(String(done))}&page=${encodeURIComponent(String(page))}`"));
+        assert!(dart.contains("Future<List<Task>> listTasks(bool done, int page) async"));
+        assert!(dart.contains("'/tasks?done=${Uri.encodeQueryComponent('$done')}&page=${Uri.encodeQueryComponent('$page')}'"));
+        assert!(rust.contains("pub async fn list_tasks(&self, done: bool, page: i32)"));
+        assert!(rust.contains("\"/tasks?done={}&page={}\""));
     }
 
     #[test]
@@ -2695,6 +2837,7 @@ mod tests {
                 path: "/tasks".to_owned(),
                 data_param: Some("new_task".to_owned()),
                 path_params: Vec::new(),
+                query_params: Vec::new(),
                 body: Some("NewTask".to_owned()),
                 response: Some("Task".to_owned()),
                 error: None,
@@ -2767,6 +2910,7 @@ mod tests {
                 path: "/tasks".to_owned(),
                 data_param: Some("new_task".to_owned()),
                 path_params: Vec::new(),
+                query_params: Vec::new(),
                 body: Some("NewTask".to_owned()),
                 response: Some("Task".to_owned()),
                 error: None,
