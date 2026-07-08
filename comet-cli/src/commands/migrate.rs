@@ -169,5 +169,8 @@ fn describe_blocker(blocker: &MigrationBlocker) -> String {
             "change foreign key on `{table}` ({}) (write this migration by hand)",
             columns.join(", ")
         ),
+        MigrationBlocker::ChangeRls { table } => {
+            format!("change RLS policies on `{table}` (review the authorization change by hand)")
+        }
     }
 }

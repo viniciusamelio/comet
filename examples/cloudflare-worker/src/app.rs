@@ -2,6 +2,7 @@ use rocket::{Build, Rocket};
 use worker::{Context, Env};
 
 use crate::assets::routes::{get_asset, put_asset};
+use crate::boards::routes::list_org_boards;
 use crate::demo::routes::{
     echo, index, private_admin, private_me, private_reviewer, stream_demo, websocket_echo,
 };
@@ -68,6 +69,7 @@ pub fn rocket(env: Env, _ctx: Context) -> Rocket<Build> {
                 websocket_echo,
                 put_asset,
                 get_asset,
+                list_org_boards,
                 list_tasks,
                 get_task,
                 create_task,

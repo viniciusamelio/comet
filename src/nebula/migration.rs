@@ -1,5 +1,5 @@
 use super::column::quote_ident;
-use super::{ColumnDef, ForeignKeyDef, TableDef};
+use super::{ColumnDef, ForeignKeyDef, RlsPolicyKind, TableDef};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaManifest {
@@ -75,7 +75,8 @@ impl SchemaManifest {
 
 impl TableDef {
     pub fn lint(&self) -> Vec<SchemaLint> {
-        self.foreign_keys
+        let mut lints = self
+            .foreign_keys
             .iter()
             .flat_map(|foreign_key| foreign_key.columns.iter())
             .filter(|column| !is_indexed_in_table(*self, column))
@@ -83,7 +84,26 @@ impl TableDef {
                 table: self.name,
                 column,
             })
-            .collect()
+            .collect::<Vec<_>>();
+
+        if self.rls.is_empty() {
+            lints.push(SchemaLint::MissingRls { table: self.name });
+        }
+
+        for policy in self.rls {
+            if matches!(policy.kind, RlsPolicyKind::Owner | RlsPolicyKind::Tenant) {
+                if let Some(column) = policy.column {
+                    if !is_indexed_in_table(*self, column) {
+                        lints.push(SchemaLint::UnindexedRlsColumn {
+                            table: self.name,
+                            column,
+                        });
+                    }
+                }
+            }
+        }
+
+        lints
     }
 }
 
@@ -175,11 +195,19 @@ pub enum MigrationBlocker {
     AddForeignKey { table: String, columns: Vec<String> },
     DropForeignKey { table: String, columns: Vec<String> },
     ChangeForeignKey { table: String, columns: Vec<String> },
+    ChangeRls { table: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchemaLint {
     UnindexedForeignKey {
+        table: &'static str,
+        column: &'static str,
+    },
+    MissingRls {
+        table: &'static str,
+    },
+    UnindexedRlsColumn {
         table: &'static str,
         column: &'static str,
     },
@@ -351,6 +379,11 @@ fn diff_table(
 
     diff_indexes(current, desired, statements, blockers);
     diff_foreign_keys(current, desired, blockers);
+    if current.rls != desired.rls {
+        blockers.push(MigrationBlocker::ChangeRls {
+            table: current.name.to_owned(),
+        });
+    }
 }
 
 fn diff_indexes(

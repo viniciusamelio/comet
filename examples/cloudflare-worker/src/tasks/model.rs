@@ -17,10 +17,15 @@ pub struct Task {
 /// actually serve to clients.
 #[derive(Debug, Clone, Deserialize, comet::nebula::Entity)]
 #[nebula(table = "tasks")]
+#[nebula(rls(owner = "user_id"))]
+#[nebula(rls(update, permission = "tasks:write"))]
+#[nebula(rls(update, custom = "can_complete_task"))]
 #[serde(crate = "rocket::serde")]
 pub struct TaskRow {
     #[nebula(primary_key, auto, unique, index)]
     pub id: i32,
+    #[nebula(index)]
+    pub user_id: String,
     pub title: String,
     #[nebula(default = "0")]
     pub done: i32,
@@ -93,6 +98,7 @@ mod tests {
     fn task_row_maps_integer_done_to_bool() {
         let row = TaskRow {
             id: 1,
+            user_id: "user_1".into(),
             title: "write tests".into(),
             done: 1,
             created_at: "2026-07-01T00:00:00Z".into(),
@@ -109,6 +115,7 @@ mod tests {
     fn task_row_zero_is_not_done() {
         let row = TaskRow {
             id: 2,
+            user_id: "user_1".into(),
             title: "pending".into(),
             done: 0,
             created_at: "2026-07-01T00:00:00Z".into(),

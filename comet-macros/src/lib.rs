@@ -122,6 +122,13 @@ fn expand_entity(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         });
     }
 
+    validate_rls_policies(&struct_options.rls, &column_names, &ident)?;
+    let rls_defs = struct_options
+        .rls
+        .iter()
+        .map(|policy| rls_policy_tokens(policy, &comet))
+        .collect::<Vec<_>>();
+
     if primary_key_count > 1 {
         return Err(syn::Error::new_spanned(
             ident,
@@ -141,6 +148,7 @@ fn expand_entity(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                 columns: &[#(#column_defs),*],
                 indexes: &[],
                 foreign_keys: &[#(#foreign_key_defs),*],
+                rls: &[#(#rls_defs),*],
             };
         }
     })
@@ -150,6 +158,7 @@ fn expand_entity(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
 struct StructOptions {
     table: Option<String>,
     comet_path: Option<Path>,
+    rls: Vec<RlsPolicyAttr>,
 }
 
 impl StructOptions {
@@ -160,12 +169,24 @@ impl StructOptions {
             attr.parse_args_with(|input: ParseStream<'_>| {
                 while !input.is_empty() {
                     let key: Ident = input.parse()?;
-                    input.parse::<Token![=]>()?;
 
-                    if key == "table" {
-                        options.table = Some(input.parse::<LitStr>()?.value());
-                    } else if key == "crate" {
-                        options.comet_path = Some(input.parse::<LitStr>()?.parse()?);
+                    if key == "rls" {
+                        let content;
+                        syn::parenthesized!(content in input);
+                        options.rls.push(parse_rls_policy(&content)?);
+                    } else if input.peek(Token![=]) {
+                        input.parse::<Token![=]>()?;
+
+                        if key == "table" {
+                            options.table = Some(input.parse::<LitStr>()?.value());
+                        } else if key == "crate" {
+                            options.comet_path = Some(input.parse::<LitStr>()?.parse()?);
+                        } else {
+                            return Err(syn::Error::new_spanned(
+                                key,
+                                "unsupported Nebula struct attribute",
+                            ));
+                        }
                     } else {
                         return Err(syn::Error::new_spanned(
                             key,
@@ -183,6 +204,329 @@ impl StructOptions {
         }
 
         Ok(options)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RlsOperationAttr {
+    Select,
+    Insert,
+    Update,
+    Delete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RlsKindAttr {
+    Public,
+    Owner,
+    Tenant,
+    Rbac,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RlsModeAttr {
+    All,
+    Any,
+}
+
+#[derive(Debug, Clone)]
+struct RlsPolicyAttr {
+    operations: Vec<RlsOperationAttr>,
+    kind: Option<RlsKindAttr>,
+    column: Option<String>,
+    mode: RlsModeAttr,
+    roles: Vec<String>,
+    permissions: Vec<String>,
+    scopes: Vec<String>,
+    resource: Option<String>,
+    custom: Option<String>,
+}
+
+impl Default for RlsPolicyAttr {
+    fn default() -> Self {
+        Self {
+            operations: Vec::new(),
+            kind: None,
+            column: None,
+            mode: RlsModeAttr::All,
+            roles: Vec::new(),
+            permissions: Vec::new(),
+            scopes: Vec::new(),
+            resource: None,
+            custom: None,
+        }
+    }
+}
+
+fn parse_rls_policy(input: ParseStream<'_>) -> Result<RlsPolicyAttr> {
+    let mut policy = RlsPolicyAttr::default();
+
+    while !input.is_empty() {
+        let key: Ident = input.parse()?;
+        let key_name = key.to_string();
+
+        if let Some(operation) = parse_rls_operation(&key_name) {
+            policy.operations.push(operation);
+        } else if key_name == "public" {
+            set_rls_kind(&mut policy, RlsKindAttr::Public, &key)?;
+        } else if key_name == "any" || key_name == "all" {
+            let content;
+            syn::parenthesized!(content in input);
+            policy.mode = if key_name == "any" {
+                RlsModeAttr::Any
+            } else {
+                RlsModeAttr::All
+            };
+            parse_rls_requirements(&content, &mut policy)?;
+            set_rls_kind(&mut policy, RlsKindAttr::Rbac, &key)?;
+        } else if input.peek(Token![=]) {
+            input.parse::<Token![=]>()?;
+            match key_name.as_str() {
+                "owner" => {
+                    policy.column = Some(input.parse::<LitStr>()?.value());
+                    set_rls_kind(&mut policy, RlsKindAttr::Owner, &key)?;
+                }
+                "tenant" => {
+                    policy.column = Some(input.parse::<LitStr>()?.value());
+                    set_rls_kind(&mut policy, RlsKindAttr::Tenant, &key)?;
+                }
+                "role" => {
+                    policy.roles.push(input.parse::<LitStr>()?.value());
+                    set_rls_kind(&mut policy, RlsKindAttr::Rbac, &key)?;
+                }
+                "permission" => {
+                    policy.permissions.push(input.parse::<LitStr>()?.value());
+                    set_rls_kind(&mut policy, RlsKindAttr::Rbac, &key)?;
+                }
+                "scope" => {
+                    policy.scopes.push(input.parse::<LitStr>()?.value());
+                    set_rls_kind(&mut policy, RlsKindAttr::Rbac, &key)?;
+                }
+                "resource" => {
+                    policy.resource = Some(input.parse::<LitStr>()?.value());
+                }
+                "custom" => {
+                    policy.custom = Some(input.parse::<LitStr>()?.value());
+                    set_rls_kind(&mut policy, RlsKindAttr::Custom, &key)?;
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "unsupported Nebula RLS attribute",
+                    ));
+                }
+            }
+        } else {
+            return Err(syn::Error::new_spanned(
+                key,
+                "unsupported Nebula RLS attribute",
+            ));
+        }
+
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+        }
+    }
+
+    if policy.kind.is_none() {
+        return Err(input.error("Nebula `rls` requires a policy kind"));
+    }
+
+    Ok(policy)
+}
+
+fn parse_rls_requirements(input: ParseStream<'_>, policy: &mut RlsPolicyAttr) -> Result<()> {
+    while !input.is_empty() {
+        let key: Ident = input.parse()?;
+        let key_name = key.to_string();
+        input.parse::<Token![=]>()?;
+        let value = input.parse::<LitStr>()?.value();
+
+        match key_name.as_str() {
+            "role" => policy.roles.push(value),
+            "permission" => policy.permissions.push(value),
+            "scope" => policy.scopes.push(value),
+            "resource" => policy.resource = Some(value),
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    key,
+                    "unsupported Nebula RLS authorization attribute",
+                ));
+            }
+        }
+
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_rls_operation(value: &str) -> Option<RlsOperationAttr> {
+    match value {
+        "select" => Some(RlsOperationAttr::Select),
+        "insert" => Some(RlsOperationAttr::Insert),
+        "update" => Some(RlsOperationAttr::Update),
+        "delete" => Some(RlsOperationAttr::Delete),
+        _ => None,
+    }
+}
+
+fn set_rls_kind(policy: &mut RlsPolicyAttr, kind: RlsKindAttr, key: &Ident) -> Result<()> {
+    if let Some(current) = policy.kind {
+        if current != kind {
+            return Err(syn::Error::new_spanned(
+                key,
+                "Nebula `rls` policy cannot combine multiple policy kinds",
+            ));
+        }
+    }
+
+    policy.kind = Some(kind);
+    Ok(())
+}
+
+fn validate_rls_policies(
+    policies: &[RlsPolicyAttr],
+    column_names: &HashSet<String>,
+    ident: &Ident,
+) -> Result<()> {
+    for policy in policies {
+        let kind = policy.kind.expect("parsed RLS policy kind");
+        if let Some(column) = &policy.column {
+            if !column_names.contains(column) {
+                return Err(syn::Error::new_spanned(
+                    ident,
+                    format!("Nebula `rls` references unknown column `{column}`"),
+                ));
+            }
+        }
+
+        match kind {
+            RlsKindAttr::Public => {
+                if !policy.operations.is_empty()
+                    || policy.column.is_some()
+                    || !policy.roles.is_empty()
+                    || !policy.permissions.is_empty()
+                    || !policy.scopes.is_empty()
+                    || policy.resource.is_some()
+                    || policy.custom.is_some()
+                {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        "Nebula `rls(public)` cannot include operations, columns, authorization, resource, or custom predicates",
+                    ));
+                }
+            }
+            RlsKindAttr::Owner | RlsKindAttr::Tenant => {
+                if policy.column.is_none() {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        "Nebula owner/tenant RLS requires a column",
+                    ));
+                }
+                if !policy.roles.is_empty()
+                    || !policy.permissions.is_empty()
+                    || !policy.scopes.is_empty()
+                    || policy.resource.is_some()
+                    || policy.custom.is_some()
+                {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        "Nebula owner/tenant RLS cannot include authorization, resource, or custom predicates",
+                    ));
+                }
+            }
+            RlsKindAttr::Rbac => {
+                if policy.roles.is_empty() && policy.permissions.is_empty() && policy.scopes.is_empty()
+                {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        "Nebula RBAC RLS requires at least one role, permission, or scope",
+                    ));
+                }
+                if policy.column.is_some() || policy.custom.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        "Nebula RBAC RLS cannot include owner/tenant columns or custom predicates",
+                    ));
+                }
+            }
+            RlsKindAttr::Custom => {
+                if policy.custom.as_deref().is_none_or(str::is_empty) {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        "Nebula custom RLS requires a non-empty predicate name",
+                    ));
+                }
+                if policy.column.is_some()
+                    || !policy.roles.is_empty()
+                    || !policy.permissions.is_empty()
+                    || !policy.scopes.is_empty()
+                    || policy.resource.is_some()
+                {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        "Nebula custom RLS cannot include owner/tenant columns or authorization",
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn rls_policy_tokens(policy: &RlsPolicyAttr, comet: &Path) -> proc_macro2::TokenStream {
+    let operations = policy.operations.iter().map(|operation| match operation {
+        RlsOperationAttr::Select => quote!(#comet::nebula::RlsOperation::Select),
+        RlsOperationAttr::Insert => quote!(#comet::nebula::RlsOperation::Insert),
+        RlsOperationAttr::Update => quote!(#comet::nebula::RlsOperation::Update),
+        RlsOperationAttr::Delete => quote!(#comet::nebula::RlsOperation::Delete),
+    });
+    let kind = match policy.kind.expect("validated RLS policy kind") {
+        RlsKindAttr::Public => quote!(#comet::nebula::RlsPolicyKind::Public),
+        RlsKindAttr::Owner => quote!(#comet::nebula::RlsPolicyKind::Owner),
+        RlsKindAttr::Tenant => quote!(#comet::nebula::RlsPolicyKind::Tenant),
+        RlsKindAttr::Rbac => quote!(#comet::nebula::RlsPolicyKind::Rbac),
+        RlsKindAttr::Custom => quote!(#comet::nebula::RlsPolicyKind::Custom),
+    };
+    let column = match &policy.column {
+        Some(column) => quote!(Some(#column)),
+        None => quote!(None),
+    };
+    let mode = match policy.mode {
+        RlsModeAttr::All => quote!(#comet::nebula::RlsMatchMode::All),
+        RlsModeAttr::Any => quote!(#comet::nebula::RlsMatchMode::Any),
+    };
+    let roles = policy.roles.iter();
+    let permissions = policy.permissions.iter();
+    let scopes = policy.scopes.iter();
+    let resource = match &policy.resource {
+        Some(resource) => quote!(Some(#resource)),
+        None => quote!(None),
+    };
+    let custom = match &policy.custom {
+        Some(custom) => quote!(Some(#custom)),
+        None => quote!(None),
+    };
+
+    quote! {
+        #comet::nebula::RlsPolicyDef {
+            operations: &[#(#operations),*],
+            kind: #kind,
+            column: #column,
+            authorization: #comet::nebula::RlsAuthorizationDef {
+                mode: #mode,
+                roles: &[#(#roles),*],
+                permissions: &[#(#permissions),*],
+                scopes: &[#(#scopes),*],
+                resource: #resource,
+            },
+            custom: #custom,
+        }
     }
 }
 

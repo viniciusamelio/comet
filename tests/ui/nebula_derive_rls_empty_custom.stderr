@@ -1,0 +1,5 @@
+error: Nebula custom RLS requires a non-empty predicate name
+ --> tests/ui/nebula_derive_rls_empty_custom.rs:4:8
+  |
+4 | struct Task {
+  |        ^^^^

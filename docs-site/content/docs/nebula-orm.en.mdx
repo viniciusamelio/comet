@@ -177,6 +177,155 @@ Task::delete().where_(Task::ID.eq(42)).to_statement();
 Bind order is always deterministic: assignment/filter binds first, then
 `LIMIT`/`OFFSET` at the end.
 
+## Row-level security
+
+D1 uses SQLite semantics and does not provide Postgres-style native RLS.
+Nebula's RLS is enforced in the ORM layer by generating additional predicates
+and validating authorization before statements are executed. Raw SQL remains
+available, but it is outside automatic RLS enforcement; use
+`Statement::raw_unscoped(...)` so reviews and searches can identify those
+manual authorization sites.
+
+Declare RLS on the entity:
+
+```rust
+#[derive(comet::nebula::Entity)]
+#[nebula(table = "tasks")]
+#[nebula(rls(owner = "user_id"))]
+#[nebula(rls(update, permission = "tasks:write"))]
+#[nebula(rls(update, custom = "can_complete_task"))]
+pub struct TaskRow {
+    #[nebula(primary_key, auto)]
+    pub id: i64,
+    #[nebula(index)]
+    pub user_id: String,
+    pub done: i32,
+}
+```
+
+Supported first-class policy forms:
+
+- `#[nebula(rls(public))]` — explicitly public table.
+- `#[nebula(rls(owner = "user_id"))]` — matches the current user id.
+- `#[nebula(rls(tenant = "org_id"))]` — matches the current tenant id.
+- `#[nebula(rls(select, permission = "boards:read"))]` — RBAC per operation.
+- `#[nebula(rls(update, any(role = "admin", permission = "boards:write")))]`
+  — any/all RBAC matching.
+- `#[nebula(rls(delete, custom = "can_delete_board"))]` — app-provided
+  predicate.
+
+Use scoped builders with an `AccessContext`:
+
+```rust
+let context = comet::nebula::AccessContext::authenticated(user_id);
+let tenant_context = comet::nebula::AccessContext::default()
+    .with_tenant_value(42_i64);
+
+let statement = TaskRow::select_scoped(&context)?
+    .where_(TaskRow::DONE.eq(0))
+    .limit(50)
+    .to_statement();
+```
+
+Owner and tenant values are stored as Nebula `Value`s, so text ids, integer
+ids, booleans, blobs, and other supported bind types keep their original SQL
+bind type. `authenticated(...)` and `with_tenant(...)` are string conveniences;
+use `authenticated_value(...)`, `with_user_value(...)`, or
+`with_tenant_value(...)` for non-text keys.
+
+Multiple policies that apply to the same operation compose with `AND`.
+Use this for defense in depth, such as owner/tenant filtering plus RBAC plus a
+custom lifecycle predicate. If you need `OR` semantics for row predicates,
+encode that in one custom predicate.
+
+When `comet-auth` is built with its `nebula` feature, sessions can build an
+access context directly:
+
+```rust
+use comet_auth::NebulaAccessContextExt;
+
+let context = session.to_nebula_access_context();
+```
+
+Custom predicates implement `CustomPredicateProvider` and return a Nebula
+`Expr`:
+
+```rust
+struct TaskPredicates;
+
+impl comet::nebula::CustomPredicateProvider for TaskPredicates {
+    fn predicate(
+        &self,
+        table: &'static str,
+        name: &'static str,
+        _operation: comet::nebula::RlsOperation,
+        _context: &comet::nebula::AccessContext,
+    ) -> Result<comet::nebula::Expr, comet::nebula::RlsError> {
+        if table == TaskRow::TABLE.name && name == "can_complete_task" {
+            Ok(TaskRow::DONE.eq(0))
+        } else {
+            Err(comet::nebula::RlsError::MissingCustomPredicate { table, name })
+        }
+    }
+
+    fn registered_predicate_rules(
+        &self,
+    ) -> &'static [comet::nebula::CustomPredicateRegistration] {
+        &[comet::nebula::CustomPredicateRegistration {
+            name: "can_complete_task",
+            operations: &[comet::nebula::RlsOperation::Update],
+        }]
+    }
+}
+```
+
+Use custom rules when ownership, tenancy, and static RBAC are not enough:
+
+- lifecycle rules, such as "only complete pending tasks";
+- membership rules, such as "only active project members";
+- mixed rules, such as "creator or admin";
+- feature rules, such as "only if the workspace has billing enabled".
+
+Keep custom predicate names stable because entity metadata stores the string.
+Expose those names through `registered_predicate_rules()` to validate the
+operation too (`select`, `insert`, `update`, `delete`), or use
+`registered_predicates()` only when the same predicate is intentionally valid
+for every operation. Validate startup or route setup with
+`Entity::validate_custom_predicates_with(...)`. Test the allow path, denied
+path, and missing-predicate path. A missing custom predicate is treated as a
+server/configuration error.
+
+`select()`, `insert()`, `update()`, and `delete()` on protected tables report
+`QueryLint::UnscopedRls` unless RLS was applied or
+`.allow_unscoped_rls("reason")` is used explicitly. Schema lints also report missing
+RLS declarations and owner/tenant columns that are not indexed.
+
+Use checked statement generation to fail closed on lints:
+
+```rust
+let statement = TaskRow::select_scoped(&context)?
+    .limit(50)
+    .to_statement_checked()?;
+```
+
+The CLI can report entity coverage:
+
+```sh
+comet rls status --strict
+comet rls status --strict --json \
+  --custom-predicate-rule can_complete_task:update
+```
+
+RLS metadata is part of schema snapshots. Changing RLS policies in an existing
+table is reported as a migration blocker so the authorization change is
+reviewed explicitly.
+
+Threat model: Nebula RLS protects queries built through scoped Nebula builders
+when the app supplies the correct `AccessContext`. It does not protect raw SQL,
+incorrect tenant context, custom predicates that are too broad, or data access
+that bypasses Nebula. Treat `Statement::raw_unscoped(...)` and
+`.allow_unscoped_rls("reason")` as security review points.
+
 ## Relationships
 
 Relationships are **explicit query-builder shortcuts, not lazy loading or
@@ -196,6 +345,9 @@ impl Board {
   (`Parent::select().where_(foreign_column.eq(local_value)).limit(1)`).
 - `HasMany::select_children(parent_value)` returns a `Select<Child>` — the
   caller still picks the limit/ordering.
+- `select_parent_scoped(...)` and `select_children_scoped(...)` apply RLS on
+  the loaded side of the relationship with the same `AccessContext`; the
+  `*_scoped_with(...)` variants accept a `CustomPredicateProvider`.
 
 ```rust
 let statement = Task::BOARD.select_parent(42).to_statement();
@@ -205,6 +357,11 @@ let statement = Board::TASKS.select_children(7)
     .order_by(Task::ID.asc())
     .limit(50)
     .to_statement();
+
+let statement = Board::TASKS.select_children_scoped(7, &context)?
+    .order_by(Task::ID.asc())
+    .limit(50)
+    .to_statement_checked()?;
 ```
 
 ## Migration generation
@@ -233,7 +390,8 @@ example `ALTER TABLE "tasks" ADD COLUMN "done" INTEGER NOT NULL DEFAULT 0`.
 SQL emitted): `DropTable`, `DropColumn`, `ChangeColumn`,
 `UnsafeAddColumn` (non-nullable column with no default),
 `DropIndex`/`ChangeIndex`, `AddForeignKey`/`DropForeignKey`/`ChangeForeignKey`
-on existing tables. `MigrationPlan::is_safe()` is `blockers.is_empty()`.
+on existing tables, and `ChangeRls` when RLS policies change on an existing
+table. `MigrationPlan::is_safe()` is `blockers.is_empty()`.
 
 `MigrationPlan::migration_file_name(sequence, name)` produces
 Wrangler-compatible names, like `0007_add_task_done.sql`.

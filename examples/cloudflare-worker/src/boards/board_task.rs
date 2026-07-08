@@ -12,6 +12,7 @@ use crate::users::model::UserRow;
 /// property of any single one of the three tables it references.
 #[derive(Debug, Clone, Deserialize, comet::nebula::Entity)]
 #[nebula(table = "board_tasks")]
+#[nebula(rls(public))]
 #[serde(crate = "rocket::serde")]
 pub struct BoardTaskRow {
     #[nebula(primary_key, auto, unique, index)]

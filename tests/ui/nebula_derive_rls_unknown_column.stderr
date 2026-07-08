@@ -1,0 +1,5 @@
+error: Nebula `rls` references unknown column `missing_user_id`
+ --> tests/ui/nebula_derive_rls_unknown_column.rs:4:8
+  |
+4 | struct Task {
+  |        ^^^^

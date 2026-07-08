@@ -26,6 +26,9 @@ pub enum Command {
     /// Scaffold Comet Auth migrations and Cloudflare binding hints.
     #[command(subcommand)]
     Auth(AuthCommand),
+    /// Inspect Nebula RLS coverage.
+    #[command(subcommand)]
+    Rls(RlsCommand),
     /// Run the project's test/release gate.
     #[command(subcommand)]
     Test(TestCommand),
@@ -35,6 +38,12 @@ pub enum Command {
 pub enum AuthCommand {
     /// Add the Comet Auth runtime migration to a project.
     Init(AuthInitArgs),
+}
+
+#[derive(Subcommand)]
+pub enum RlsCommand {
+    /// Show RLS coverage for discovered Nebula entities.
+    Status(RlsStatusArgs),
 }
 
 #[derive(Args)]
@@ -144,6 +153,29 @@ pub struct AuthInitArgs {
     /// Also add the RBAC authorization migration.
     #[arg(long)]
     pub with_rbac: bool,
+}
+
+#[derive(Args)]
+pub struct RlsStatusArgs {
+    /// Project directory to inspect. Defaults to the current directory.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+
+    /// Exit non-zero when any table has missing or incomplete RLS coverage.
+    #[arg(long)]
+    pub strict: bool,
+
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Declare a custom predicate name available for all operations.
+    #[arg(long = "custom-predicate", value_name = "NAME")]
+    pub custom_predicates: Vec<String>,
+
+    /// Declare a custom predicate for specific operations, e.g. can_archive:update,delete.
+    #[arg(long = "custom-predicate-rule", value_name = "NAME:OPS")]
+    pub custom_predicate_rules: Vec<String>,
 }
 
 #[derive(Subcommand)]

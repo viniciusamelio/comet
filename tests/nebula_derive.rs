@@ -21,6 +21,7 @@ struct TaskRow {
 fn derive_entity_generates_metadata_and_columns() {
     assert_eq!(TaskRow::TABLE.name, "tasks");
     assert_eq!(TaskRow::TABLE.indexes, &[]);
+    assert_eq!(TaskRow::TABLE.rls, &[]);
     assert_eq!(TaskRow::ID.name(), "id");
     assert_eq!(TaskRow::BOARD_ID.name(), "board_id");
     assert_eq!(TaskRow::TITLE.name(), "title");
@@ -56,6 +57,39 @@ fn derive_entity_generates_metadata_and_columns() {
         TaskRow::TABLE.columns[4].default_sql,
         Some("datetime('now')")
     );
+}
+
+#[derive(comet::nebula::Entity)]
+#[nebula(table = "boards")]
+#[nebula(rls(owner = "user_id"))]
+#[nebula(rls(select, permission = "boards:read"))]
+#[nebula(rls(update, any(role = "admin", permission = "boards:write")))]
+#[nebula(rls(delete, custom = "can_delete_board"))]
+#[allow(dead_code)]
+struct SecuredBoard {
+    #[nebula(primary_key, auto)]
+    id: i64,
+    #[nebula(index)]
+    user_id: String,
+    title: String,
+}
+
+#[test]
+fn derive_entity_generates_rls_metadata() {
+    use comet::nebula::{RlsMatchMode, RlsOperation, RlsPolicyKind};
+
+    let policies = SecuredBoard::TABLE.rls;
+
+    assert_eq!(policies.len(), 4);
+    assert_eq!(policies[0].kind, RlsPolicyKind::Owner);
+    assert_eq!(policies[0].column, Some("user_id"));
+    assert_eq!(policies[1].operations, &[RlsOperation::Select]);
+    assert_eq!(policies[1].authorization.permissions, &["boards:read"]);
+    assert_eq!(policies[2].operations, &[RlsOperation::Update]);
+    assert_eq!(policies[2].authorization.mode, RlsMatchMode::Any);
+    assert_eq!(policies[2].authorization.roles, &["admin"]);
+    assert_eq!(policies[3].kind, RlsPolicyKind::Custom);
+    assert_eq!(policies[3].custom, Some("can_delete_board"));
 }
 
 #[test]

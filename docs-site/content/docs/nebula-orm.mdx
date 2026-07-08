@@ -179,6 +179,154 @@ Task::delete().where_(Task::ID.eq(42)).to_statement();
 A ordem dos binds é sempre determinística: binds de assignment/filtro
 primeiro, depois `LIMIT`/`OFFSET` no final.
 
+## Row-level security
+
+D1 usa semântica SQLite e não oferece RLS nativo no estilo do Postgres. No
+Nebula, RLS é aplicado na camada do ORM: o builder adiciona predicates e
+valida autorização antes da execução do statement. SQL cru continua disponível,
+mas fica fora da aplicação automática de RLS; use
+`Statement::raw_unscoped(...)` para que revisões e buscas identifiquem esses
+pontos de autorização manual.
+
+Declare RLS na entidade:
+
+```rust
+#[derive(comet::nebula::Entity)]
+#[nebula(table = "tasks")]
+#[nebula(rls(owner = "user_id"))]
+#[nebula(rls(update, permission = "tasks:write"))]
+#[nebula(rls(update, custom = "can_complete_task"))]
+pub struct TaskRow {
+    #[nebula(primary_key, auto)]
+    pub id: i64,
+    #[nebula(index)]
+    pub user_id: String,
+    pub done: i32,
+}
+```
+
+Formas suportadas:
+
+- `#[nebula(rls(public))]` — tabela explicitamente pública.
+- `#[nebula(rls(owner = "user_id"))]` — compara com o usuário atual.
+- `#[nebula(rls(tenant = "org_id"))]` — compara com o tenant atual.
+- `#[nebula(rls(select, permission = "boards:read"))]` — RBAC por operação.
+- `#[nebula(rls(update, any(role = "admin", permission = "boards:write")))]`
+  — RBAC em modo any/all.
+- `#[nebula(rls(delete, custom = "can_delete_board"))]` — predicate fornecido
+  pela aplicação.
+
+Use os builders scoped com `AccessContext`:
+
+```rust
+let context = comet::nebula::AccessContext::authenticated(user_id);
+let tenant_context = comet::nebula::AccessContext::default()
+    .with_tenant_value(42_i64);
+
+let statement = TaskRow::select_scoped(&context)?
+    .where_(TaskRow::DONE.eq(0))
+    .limit(50)
+    .to_statement();
+```
+
+Valores de owner e tenant são armazenados como `Value` do Nebula, então ids em
+texto, inteiros, booleanos, blobs e outros tipos de bind suportados preservam o
+tipo SQL original. `authenticated(...)` e `with_tenant(...)` são conveniências
+para texto; use `authenticated_value(...)`, `with_user_value(...)` ou
+`with_tenant_value(...)` para chaves não textuais.
+
+Múltiplas policies aplicáveis à mesma operação são compostas com `AND`. Use
+isso para defesa em profundidade, como filtro owner/tenant mais RBAC mais um
+predicate custom de ciclo de vida. Se precisar de semântica `OR` para linhas,
+codifique isso em um único custom predicate.
+
+Com `comet-auth` compilado com a feature `nebula`, sessões podem virar
+contexto diretamente:
+
+```rust
+use comet_auth::NebulaAccessContextExt;
+
+let context = session.to_nebula_access_context();
+```
+
+Custom predicates implementam `CustomPredicateProvider` e retornam um `Expr`:
+
+```rust
+struct TaskPredicates;
+
+impl comet::nebula::CustomPredicateProvider for TaskPredicates {
+    fn predicate(
+        &self,
+        table: &'static str,
+        name: &'static str,
+        _operation: comet::nebula::RlsOperation,
+        _context: &comet::nebula::AccessContext,
+    ) -> Result<comet::nebula::Expr, comet::nebula::RlsError> {
+        if table == TaskRow::TABLE.name && name == "can_complete_task" {
+            Ok(TaskRow::DONE.eq(0))
+        } else {
+            Err(comet::nebula::RlsError::MissingCustomPredicate { table, name })
+        }
+    }
+
+    fn registered_predicate_rules(
+        &self,
+    ) -> &'static [comet::nebula::CustomPredicateRegistration] {
+        &[comet::nebula::CustomPredicateRegistration {
+            name: "can_complete_task",
+            operations: &[comet::nebula::RlsOperation::Update],
+        }]
+    }
+}
+```
+
+Use custom rules quando ownership, tenancy e RBAC estático não bastam:
+
+- regras de ciclo de vida, como "somente completar tarefas pendentes";
+- regras de associação, como "somente membros ativos do projeto";
+- regras mistas, como "criador ou admin";
+- regras de produto, como "somente se o workspace tiver billing ativo".
+
+Mantenha nomes de custom predicates estáveis, porque o metadado da entidade
+guarda a string. Exponha esses nomes com `registered_predicate_rules()` para
+validar também a operação (`select`, `insert`, `update`, `delete`) ou use
+`registered_predicates()` apenas quando o mesmo predicate for intencionalmente
+válido para todas as operações. Valide o startup ou a configuração da rota com
+`Entity::validate_custom_predicates_with(...)`. Teste caminho permitido,
+caminho negado e predicate ausente. Um custom predicate ausente é tratado como
+erro de servidor/configuração.
+
+`select()`, `insert()`, `update()` e `delete()` em tabelas protegidas reportam
+`QueryLint::UnscopedRls` quando RLS não foi aplicado. O escape hatch explícito
+é `.allow_unscoped_rls("motivo")`. Os lints de schema também reportam tabelas sem
+declaração RLS e colunas owner/tenant sem índice.
+
+Use geração checked para falhar fechado quando houver lints:
+
+```rust
+let statement = TaskRow::select_scoped(&context)?
+    .limit(50)
+    .to_statement_checked()?;
+```
+
+O CLI reporta cobertura por entidade:
+
+```sh
+comet rls status --strict
+comet rls status --strict --json \
+  --custom-predicate-rule can_complete_task:update
+```
+
+Metadados RLS fazem parte do snapshot de schema. Alterar policies RLS de uma
+tabela existente aparece como blocker de migration para que a mudança de
+autorização seja revisada explicitamente.
+
+Threat model: o RLS do Nebula protege queries feitas pelos builders scoped
+quando a aplicação fornece o `AccessContext` correto. Ele não protege SQL cru,
+tenant context incorreto, custom predicates amplos demais, nem acesso a dados
+que bypassa o Nebula. Trate `Statement::raw_unscoped(...)` e
+`.allow_unscoped_rls("motivo")` como pontos de revisão de segurança.
+
 ## Relacionamentos
 
 Relacionamentos são **atalhos explícitos de query builder, não lazy loading
@@ -199,6 +347,9 @@ impl Board {
   (`Parent::select().where_(foreign_column.eq(local_value)).limit(1)`).
 - `HasMany::select_children(parent_value)` retorna um `Select<Child>` — quem
   chama ainda escolhe limite/ordenação.
+- `select_parent_scoped(...)` e `select_children_scoped(...)` aplicam RLS no
+  lado carregado da relação usando o mesmo `AccessContext`; as variantes
+  `*_scoped_with(...)` aceitam um `CustomPredicateProvider`.
 
 ```rust
 let statement = Task::BOARD.select_parent(42).to_statement();
@@ -208,6 +359,11 @@ let statement = Board::TASKS.select_children(7)
     .order_by(Task::ID.asc())
     .limit(50)
     .to_statement();
+
+let statement = Board::TASKS.select_children_scoped(7, &context)?
+    .order_by(Task::ID.asc())
+    .limit(50)
+    .to_statement_checked()?;
 ```
 
 ## Geração de migrations
@@ -235,7 +391,8 @@ nullable, colunas com default, índices/índices únicos faltando — por exempl
 **Diffs bloqueados** (retornam um `MigrationBlocker`, exigindo revisão
 humana, sem SQL emitido): `DropTable`, `DropColumn`, `ChangeColumn`,
 `UnsafeAddColumn` (coluna não-nula sem default), `DropIndex`/`ChangeIndex`,
-`AddForeignKey`/`DropForeignKey`/`ChangeForeignKey` em tabelas existentes.
+`AddForeignKey`/`DropForeignKey`/`ChangeForeignKey` em tabelas existentes e
+`ChangeRls` quando policies RLS mudam em tabela existente.
 `MigrationPlan::is_safe()` é `blockers.is_empty()`.
 
 `MigrationPlan::migration_file_name(sequence, name)` produz nomes

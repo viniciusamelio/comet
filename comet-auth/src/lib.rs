@@ -2,6 +2,8 @@ mod authz;
 mod config;
 mod cookie;
 mod error;
+#[cfg(feature = "nebula")]
+mod nebula;
 mod oauth;
 mod oidc;
 mod routes;
@@ -33,3 +35,5 @@ pub use authz::{
     AuthorizationClaims, AuthorizationMode, AuthorizationRequirement, AuthorizedSession,
     D1AuthorizationStore, RequiredAuthorization,
 };
+#[cfg(feature = "nebula")]
+pub use nebula::NebulaAccessContextExt;
