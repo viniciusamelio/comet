@@ -10,8 +10,8 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{
-    Attribute, Expr, ExprMethodCall, Field, Fields, FnArg, Item, ItemFn, Lit, LitStr, Pat,
-    ReturnType, Token, Type, Visibility,
+    Attribute, Expr, ExprMethodCall, Field, Fields, FnArg, GenericArgument, Item, ItemFn, Lit,
+    LitStr, Pat, PathArguments, ReturnType, Token, Type, Visibility,
 };
 use toml::Value;
 
@@ -117,6 +117,12 @@ struct RocketRouteArgs {
     data_param: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResultAlias {
+    name: String,
+    error_type: String,
+}
+
 impl Parse for RocketRouteArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let path = input.parse::<LitStr>()?;
@@ -143,7 +149,8 @@ impl Parse for RocketRouteArgs {
 pub fn discover_manifest(project_dir: &Path) -> Result<RpcManifest> {
     let src_dir = project_dir.join("src");
     let mut routes = Vec::new();
-    visit_dir(&src_dir, &[], &mut routes)?;
+    let result_aliases = discover_project_result_aliases(&src_dir)?;
+    visit_dir(&src_dir, &[], &result_aliases, &mut routes)?;
     let mount_prefixes = discover_mount_prefixes(&src_dir)?;
     apply_mount_prefixes(&mount_prefixes, &mut routes);
     resolve_authorization_policies(project_dir, &mut routes)?;
@@ -1893,7 +1900,12 @@ fn policy_path(policy: &str, module_path: &[String], crate_name: &str) -> String
     segments.join("::")
 }
 
-fn visit_dir(dir: &Path, module_path: &[String], routes: &mut Vec<RpcRoute>) -> Result<()> {
+fn visit_dir(
+    dir: &Path,
+    module_path: &[String],
+    result_aliases: &[ResultAlias],
+    routes: &mut Vec<RpcRoute>,
+) -> Result<()> {
     let mut dir_entries = fs::read_dir(dir)
         .with_context(|| format!("reading directory {}", dir.display()))?
         .collect::<std::io::Result<Vec<_>>>()
@@ -1909,19 +1921,24 @@ fn visit_dir(dir: &Path, module_path: &[String], routes: &mut Vec<RpcRoute>) -> 
         if file_type.is_dir() {
             let mut nested_path = module_path.to_vec();
             nested_path.push(entry.file_name().to_string_lossy().into_owned());
-            visit_dir(&path, &nested_path, routes)?;
+            visit_dir(&path, &nested_path, result_aliases, routes)?;
             continue;
         }
 
         if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-            visit_file(&path, module_path, routes)?;
+            visit_file(&path, module_path, result_aliases, routes)?;
         }
     }
 
     Ok(())
 }
 
-fn visit_file(path: &Path, module_path: &[String], routes: &mut Vec<RpcRoute>) -> Result<()> {
+fn visit_file(
+    path: &Path,
+    module_path: &[String],
+    result_aliases: &[ResultAlias],
+    routes: &mut Vec<RpcRoute>,
+) -> Result<()> {
     let file_module_path = file_module_path(path, module_path);
     let source = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let file = syn::parse_file(&source).with_context(|| format!("parsing {}", path.display()))?;
@@ -1929,7 +1946,13 @@ fn visit_file(path: &Path, module_path: &[String], routes: &mut Vec<RpcRoute>) -
     for item in &file.items {
         if let Item::Fn(item_fn) = item {
             for route_attr in rocket_route_attrs(item_fn) {
-                routes.push(route_from_fn(path, &file_module_path, item_fn, route_attr));
+                routes.push(route_from_fn(
+                    path,
+                    &file_module_path,
+                    item_fn,
+                    route_attr,
+                    &result_aliases,
+                ));
             }
         }
     }
@@ -1969,6 +1992,78 @@ fn rocket_route_attrs(item_fn: &ItemFn) -> Vec<RocketRouteAttr> {
         .collect()
 }
 
+fn discover_project_result_aliases(src_dir: &Path) -> Result<Vec<ResultAlias>> {
+    let mut aliases = Vec::new();
+    visit_result_alias_dir(src_dir, &mut aliases)?;
+    aliases.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.error_type.cmp(&b.error_type))
+    });
+    aliases.dedup();
+    Ok(aliases)
+}
+
+fn visit_result_alias_dir(dir: &Path, aliases: &mut Vec<ResultAlias>) -> Result<()> {
+    let mut dir_entries = fs::read_dir(dir)
+        .with_context(|| format!("reading directory {}", dir.display()))?
+        .collect::<std::io::Result<Vec<_>>>()
+        .with_context(|| format!("reading directory {}", dir.display()))?;
+    dir_entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in dir_entries {
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("reading file type of {}", path.display()))?;
+
+        if file_type.is_dir() {
+            visit_result_alias_dir(&path, aliases)?;
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+            let source =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            let file =
+                syn::parse_file(&source).with_context(|| format!("parsing {}", path.display()))?;
+            aliases.extend(discover_result_aliases(&file));
+        }
+    }
+
+    Ok(())
+}
+
+fn discover_result_aliases(file: &syn::File) -> Vec<ResultAlias> {
+    file.items
+        .iter()
+        .filter_map(|item| {
+            let Item::Type(item_type) = item else {
+                return None;
+            };
+            let alias_name = item_type.ident.to_string();
+            let Type::Path(type_path) = item_type.ty.as_ref() else {
+                return None;
+            };
+            let segment = type_path.path.segments.last()?;
+            if segment.ident != "Result" {
+                return None;
+            }
+            let PathArguments::AngleBracketed(args) = &segment.arguments else {
+                return None;
+            };
+            let mut type_args = args.args.iter().filter_map(|arg| match arg {
+                GenericArgument::Type(ty) => Some(type_to_string(ty)),
+                _ => None,
+            });
+            let _ok = type_args.next()?;
+            let error_type = type_args.next()?;
+
+            Some(ResultAlias {
+                name: alias_name,
+                error_type,
+            })
+        })
+        .collect()
+}
+
 fn route_method(ident: &str) -> Option<&'static str> {
     match ident {
         "get" => Some("GET"),
@@ -1985,6 +2080,7 @@ fn route_from_fn(
     module_path: &[String],
     item_fn: &ItemFn,
     route_attr: RocketRouteAttr,
+    result_aliases: &[ResultAlias],
 ) -> RpcRoute {
     let mut warnings = Vec::new();
     let inputs = route_inputs(item_fn);
@@ -1996,7 +2092,7 @@ fn route_from_fn(
         .as_deref()
         .and_then(|name| inputs.iter().find(|input| input.name == name))
         .and_then(|input| json_inner_type(&input.rust_type));
-    let (response, error) = response_and_error(item_fn);
+    let (response, error) = response_and_error(item_fn, result_aliases);
     let auth = auth_for_route(item_fn, &inputs);
     let support = classify_support(
         &inputs,
@@ -2127,20 +2223,24 @@ fn discover_query_params(
         .collect()
 }
 
-fn response_and_error(item_fn: &ItemFn) -> (Option<String>, Option<String>) {
+fn response_and_error(
+    item_fn: &ItemFn,
+    result_aliases: &[ResultAlias],
+) -> (Option<String>, Option<String>) {
     let ReturnType::Type(_, ty) = &item_fn.sig.output else {
         return (None, None);
     };
 
     let output = type_to_string(ty);
-    if let Some(inner) = json_inner_type(&output) {
-        return (Some(inner), None);
-    }
-
-    if let Some((ok, err)) =
-        split_result_like(&output, "Result").or_else(|| split_result_like(&output, "ApiResult"))
+    if let Some((ok, err)) = split_result_like(&output, "Result")
+        .or_else(|| split_result_alias(&output, result_aliases))
+        .or_else(|| split_result_like(&output, "ApiResult"))
     {
         return (json_inner_type(&ok).or(Some(ok)), err);
+    }
+
+    if let Some(inner) = json_inner_type(&output) {
+        return (Some(inner), None);
     }
 
     (None, Some(output))
@@ -2154,6 +2254,13 @@ fn split_result_like(output: &str, wrapper: &str) -> Option<(String, Option<Stri
         [ok, err] => Some((ok.to_string(), Some(err.to_string()))),
         _ => None,
     }
+}
+
+fn split_result_alias(output: &str, aliases: &[ResultAlias]) -> Option<(String, Option<String>)> {
+    aliases.iter().find_map(|alias| {
+        let ok = generic_inner_for_last_segment(output, &alias.name)?;
+        Some((ok, Some(alias.error_type.clone())))
+    })
 }
 
 fn auth_for_route(item_fn: &ItemFn, inputs: &[RouteInput]) -> RpcAuth {
@@ -2769,6 +2876,32 @@ mod tests {
         assert!(dart.contains("'/tasks?done=${Uri.encodeQueryComponent('$done')}&page=${Uri.encodeQueryComponent('$page')}'"));
         assert!(rust.contains("pub async fn list_tasks(&self, done: bool, page: i32)"));
         assert!(rust.contains("\"/tasks?done={}&page={}\""));
+    }
+
+    #[test]
+    fn resolves_local_result_alias_error_type() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "src/tasks/routes.rs",
+            r#"
+            use rocket::serde::json::Json;
+
+            pub struct Task;
+            pub struct RouteError;
+            pub type RouteResult<T> = Result<T, RouteError>;
+
+            #[get("/tasks/<id>")]
+            pub async fn get_task(id: i32) -> RouteResult<Json<Task>> {
+                todo!()
+            }
+            "#,
+        );
+
+        let manifest = discover_manifest(dir.path()).unwrap();
+
+        assert_eq!(manifest.routes[0].response, Some("Task".to_owned()));
+        assert_eq!(manifest.routes[0].error, Some("RouteError".to_owned()));
     }
 
     #[test]
