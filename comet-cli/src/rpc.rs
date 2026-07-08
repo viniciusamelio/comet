@@ -56,8 +56,21 @@ pub struct TsModel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TsModelField {
     pub name: String,
+    pub rust_type: String,
     pub ts_type: String,
     pub optional: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TsEnum {
+    pub name: String,
+    pub variants: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TsTypes {
+    pub models: BTreeMap<String, TsModel>,
+    pub enums: BTreeMap<String, TsEnum>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -146,16 +159,13 @@ pub fn discover_manifest(project_dir: &Path) -> Result<RpcManifest> {
     })
 }
 
-pub fn generate_typescript_client_with_models(
-    manifest: &RpcManifest,
-    models: &BTreeMap<String, TsModel>,
-) -> String {
+pub fn generate_typescript_client_with_types(manifest: &RpcManifest, types: &TsTypes) -> String {
     let json_routes = manifest
         .routes
         .iter()
         .filter(|route| route.support == RpcRouteSupport::Json)
         .collect::<Vec<_>>();
-    let declarations = typescript_type_declarations(&json_routes, models);
+    let declarations = typescript_type_declarations(&json_routes, types);
     let methods = json_routes
         .iter()
         .map(|route| render_typescript_method(route))
@@ -217,25 +227,42 @@ pub fn generate_typescript_client_with_models(
     )
 }
 
-pub fn discover_typescript_models(
-    project_dir: &Path,
-    manifest: &RpcManifest,
-) -> Result<BTreeMap<String, TsModel>> {
-    let wanted = typescript_type_names_for_manifest(manifest);
+pub fn discover_typescript_types(project_dir: &Path, manifest: &RpcManifest) -> Result<TsTypes> {
+    let mut wanted = typescript_type_names_for_manifest(manifest);
     if wanted.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(TsTypes::default());
     }
 
     let src_dir = project_dir.join("src");
-    let mut models = BTreeMap::new();
-    visit_model_dir(&src_dir, &wanted, &mut models)?;
-    Ok(models)
+    let mut types = TsTypes::default();
+    let mut scanned = std::collections::BTreeSet::new();
+
+    loop {
+        let pending = wanted
+            .difference(&scanned)
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        if pending.is_empty() {
+            break;
+        }
+
+        visit_model_dir(&src_dir, &pending, &mut types)?;
+        scanned.extend(pending);
+
+        for model in types.models.values() {
+            for field in &model.fields {
+                collect_custom_type_names(&field.rust_type, &mut wanted);
+            }
+        }
+    }
+
+    Ok(types)
 }
 
 fn visit_model_dir(
     dir: &Path,
     wanted: &std::collections::BTreeSet<String>,
-    models: &mut BTreeMap<String, TsModel>,
+    types: &mut TsTypes,
 ) -> Result<()> {
     let mut dir_entries = fs::read_dir(dir)
         .with_context(|| format!("reading directory {}", dir.display()))?
@@ -250,9 +277,9 @@ fn visit_model_dir(
             .with_context(|| format!("reading file type of {}", path.display()))?;
 
         if file_type.is_dir() {
-            visit_model_dir(&path, wanted, models)?;
+            visit_model_dir(&path, wanted, types)?;
         } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-            visit_model_file(&path, wanted, models)?;
+            visit_model_file(&path, wanted, types)?;
         }
     }
 
@@ -262,21 +289,30 @@ fn visit_model_dir(
 fn visit_model_file(
     path: &Path,
     wanted: &std::collections::BTreeSet<String>,
-    models: &mut BTreeMap<String, TsModel>,
+    types: &mut TsTypes,
 ) -> Result<()> {
     let source = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let file = syn::parse_file(&source).with_context(|| format!("parsing {}", path.display()))?;
 
     for item in &file.items {
-        let Item::Struct(item_struct) = item else {
-            continue;
-        };
-        let name = item_struct.ident.to_string();
-        if !wanted.contains(&name) {
-            continue;
-        }
-        if let Some(model) = ts_model_from_struct(item_struct) {
-            models.insert(name, model);
+        match item {
+            Item::Struct(item_struct) => {
+                let name = item_struct.ident.to_string();
+                if wanted.contains(&name)
+                    && let Some(model) = ts_model_from_struct(item_struct)
+                {
+                    types.models.insert(name, model);
+                }
+            }
+            Item::Enum(item_enum) => {
+                let name = item_enum.ident.to_string();
+                if wanted.contains(&name)
+                    && let Some(ts_enum) = ts_enum_from_enum(item_enum)
+                {
+                    types.enums.insert(name, ts_enum);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -317,8 +353,27 @@ fn ts_model_field(field: &Field) -> Option<TsModelField> {
 
     Some(TsModelField {
         name,
+        rust_type: rust_type.clone(),
         ts_type: rust_type_to_typescript(&rust_type),
         optional,
+    })
+}
+
+fn ts_enum_from_enum(item_enum: &syn::ItemEnum) -> Option<TsEnum> {
+    let rename_all = serde_rename_all(&item_enum.attrs);
+    let mut variants = Vec::new();
+
+    for variant in &item_enum.variants {
+        if !matches!(variant.fields, Fields::Unit) {
+            return None;
+        }
+        let fallback = rename_variant(&variant.ident.to_string(), rename_all.as_deref());
+        variants.push(serde_rename(&variant.attrs).unwrap_or(fallback));
+    }
+
+    Some(TsEnum {
+        name: item_enum.ident.to_string(),
+        variants,
     })
 }
 
@@ -364,6 +419,68 @@ fn serde_rename(attrs: &[Attribute]) -> Option<String> {
     }
 
     None
+}
+
+fn serde_rename_all(attrs: &[Attribute]) -> Option<String> {
+    for attr in attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        let metas = attr
+            .parse_args_with(Punctuated::<syn::Meta, Token![,]>::parse_terminated)
+            .ok()?;
+        for meta in metas {
+            let syn::Meta::NameValue(name_value) = meta else {
+                continue;
+            };
+            if !name_value.path.is_ident("rename_all") {
+                continue;
+            }
+            let syn::Expr::Lit(expr_lit) = name_value.value else {
+                continue;
+            };
+            let Lit::Str(value) = expr_lit.lit else {
+                continue;
+            };
+            return Some(value.value());
+        }
+    }
+
+    None
+}
+
+fn rename_variant(name: &str, rename_all: Option<&str>) -> String {
+    match rename_all {
+        Some("snake_case") => to_snake_case(name),
+        Some("kebab-case") => to_snake_case(name).replace('_', "-"),
+        Some("SCREAMING_SNAKE_CASE") => to_snake_case(name).to_ascii_uppercase(),
+        Some("camelCase") => to_lower_camel_case(name),
+        Some("PascalCase") | None => name.to_owned(),
+        Some(_) => name.to_owned(),
+    }
+}
+
+fn to_snake_case(value: &str) -> String {
+    let mut output = String::new();
+    let mut previous_was_lower_or_digit = false;
+    for ch in value.chars() {
+        if ch.is_ascii_uppercase() {
+            if previous_was_lower_or_digit && !output.is_empty() {
+                output.push('_');
+            }
+            output.push(ch.to_ascii_lowercase());
+            previous_was_lower_or_digit = false;
+        } else if ch == '-' || ch.is_whitespace() {
+            if !output.ends_with('_') && !output.is_empty() {
+                output.push('_');
+            }
+            previous_was_lower_or_digit = false;
+        } else {
+            output.push(ch);
+            previous_was_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        }
+    }
+    output
 }
 
 fn discover_mount_prefixes(src_dir: &Path) -> Result<BTreeMap<String, Vec<String>>> {
@@ -556,18 +673,32 @@ fn typescript_path_template(route: &RpcRoute) -> String {
     format!("`{}`", path.replace('`', "\\`"))
 }
 
-fn typescript_type_declarations(
-    routes: &[&RpcRoute],
-    models: &BTreeMap<String, TsModel>,
-) -> Vec<String> {
-    let names = typescript_type_names(routes);
+fn typescript_type_declarations(routes: &[&RpcRoute], types: &TsTypes) -> Vec<String> {
+    let mut names = typescript_type_names(routes);
+    names.extend(types.models.keys().cloned());
+    names.extend(types.enums.keys().cloned());
     names
         .into_iter()
-        .map(|name| match models.get(&name) {
-            Some(model) => render_typescript_interface(model),
-            None => format!("export type {name} = unknown;"),
+        .map(|name| {
+            if let Some(model) = types.models.get(&name) {
+                render_typescript_interface(model)
+            } else if let Some(ts_enum) = types.enums.get(&name) {
+                render_typescript_enum(ts_enum)
+            } else {
+                format!("export type {name} = unknown;")
+            }
         })
         .collect()
+}
+
+fn render_typescript_enum(ts_enum: &TsEnum) -> String {
+    let variants = ts_enum
+        .variants
+        .iter()
+        .map(|variant| format!("{variant:?}"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    format!("export type {} = {};", ts_enum.name, variants)
 }
 
 fn render_typescript_interface(model: &TsModel) -> String {
@@ -1857,20 +1988,21 @@ mod tests {
             ],
         };
 
-        let mut models = BTreeMap::new();
-        models.insert(
+        let mut types = TsTypes::default();
+        types.models.insert(
             "Task".to_owned(),
             TsModel {
                 name: "Task".to_owned(),
                 fields: vec![TsModelField {
                     name: "id".to_owned(),
+                    rust_type: "i32".to_owned(),
                     ts_type: "number".to_owned(),
                     optional: false,
                 }],
             },
         );
 
-        let ts = generate_typescript_client_with_models(&manifest, &models);
+        let ts = generate_typescript_client_with_types(&manifest, &types);
 
         assert!(ts.contains("export interface Task {\n  id: number;\n}"));
         assert!(ts.contains("async getTask(id: number): Promise<Task>"));
@@ -1895,7 +2027,17 @@ mod tests {
                 pub title: String,
                 pub done: bool,
                 pub archived_at: Option<String>,
+                pub status: TaskStatus,
                 private_note: String,
+            }
+
+            #[derive(serde::Serialize)]
+            #[serde(rename_all = "snake_case")]
+            pub enum TaskStatus {
+                InProgress,
+                Done,
+                #[serde(rename = "blocked_custom")]
+                Blocked,
             }
 
             #[get("/tasks/<id>")]
@@ -1906,14 +2048,20 @@ mod tests {
         );
 
         let manifest = discover_manifest(dir.path()).unwrap();
-        let models = discover_typescript_models(dir.path(), &manifest).unwrap();
-        let ts = generate_typescript_client_with_models(&manifest, &models);
+        let types = discover_typescript_types(dir.path(), &manifest).unwrap();
+        let ts = generate_typescript_client_with_types(&manifest, &types);
 
         assert!(ts.contains("export interface Task {"));
         assert!(ts.contains("  id: number;"));
         assert!(ts.contains("  taskTitle: string;"));
         assert!(ts.contains("  done: boolean;"));
         assert!(ts.contains("  archived_at?: string | null;"));
+        assert!(ts.contains("  status: TaskStatus;"));
+        assert!(
+            ts.contains(
+                "export type TaskStatus = \"in_progress\" | \"done\" | \"blocked_custom\";"
+            )
+        );
         assert!(!ts.contains("private_note"));
     }
 
