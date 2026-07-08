@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::cli::RpcManifestArgs;
+use crate::cli::{RpcGenerateArgs, RpcLanguage, RpcManifestArgs};
 use crate::rpc;
 
 pub fn manifest(args: RpcManifestArgs) -> Result<()> {
@@ -25,4 +25,31 @@ pub fn manifest(args: RpcManifestArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn generate(args: RpcGenerateArgs) -> Result<()> {
+    let project_dir = args.path.unwrap_or_else(|| PathBuf::from("."));
+    let manifest = rpc::discover_manifest(&project_dir)?;
+    let output = match args.lang {
+        RpcLanguage::Ts => rpc::generate_typescript_client(&manifest),
+    };
+
+    match args.out {
+        Some(path) => write_output(&path, output),
+        None => {
+            println!("{output}");
+            Ok(())
+        }
+    }
+}
+
+fn write_output(path: &PathBuf, output: String) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating directory {}", parent.display()))?;
+    }
+
+    fs::write(path, output).with_context(|| format!("writing {}", path.display()))
 }

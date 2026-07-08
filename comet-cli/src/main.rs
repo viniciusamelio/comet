@@ -27,6 +27,7 @@ fn main() -> anyhow::Result<()> {
         Command::Auth(AuthCommand::Init(args)) => commands::auth::init(args),
         Command::Rls(RlsCommand::Status(args)) => commands::rls::status(args),
         Command::Rpc(RpcCommand::Manifest(args)) => commands::rpc::manifest(args),
+        Command::Rpc(RpcCommand::Generate(args)) => commands::rpc::generate(args),
         Command::Test(TestCommand::Unit(args)) => commands::test::unit(args),
         Command::Test(TestCommand::Integration(args)) => commands::test::integration(args),
         Command::Test(TestCommand::Perf(args)) => commands::test::perf(args),

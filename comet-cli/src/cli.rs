@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
@@ -53,6 +53,8 @@ pub enum RlsCommand {
 pub enum RpcCommand {
     /// Emit the discovered RPC manifest as JSON.
     Manifest(RpcManifestArgs),
+    /// Generate a typed RPC client from discovered routes.
+    Generate(RpcGenerateArgs),
 }
 
 #[derive(Args)]
@@ -196,6 +198,26 @@ pub struct RpcManifestArgs {
     /// File to write. Defaults to stdout.
     #[arg(long)]
     pub out: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct RpcGenerateArgs {
+    /// Project directory to inspect. Defaults to the current directory.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+
+    /// Client language to generate.
+    #[arg(long)]
+    pub lang: RpcLanguage,
+
+    /// File to write. Defaults to stdout.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum RpcLanguage {
+    Ts,
 }
 
 #[derive(Subcommand)]
