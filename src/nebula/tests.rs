@@ -149,6 +149,72 @@ impl Entity for SecureDoc {
 }
 
 #[derive(Debug)]
+struct UpdateOnlyDoc;
+
+impl UpdateOnlyDoc {
+    const STATUS: Column<String> = Column::new("update_only_docs", "status");
+}
+
+const UPDATE_ONLY_DOC_COLUMNS: &[ColumnDef] = &[ColumnDef::new("status", SqlType::Text)];
+
+const UPDATE_ONLY_DOC_RLS: &[RlsPolicyDef] = &[RlsPolicyDef {
+    operations: &[RlsOperation::Update],
+    kind: RlsPolicyKind::Rbac,
+    column: None,
+    authorization: RlsAuthorizationDef {
+        mode: RlsMatchMode::All,
+        roles: &[],
+        permissions: &["docs:update"],
+        scopes: &[],
+        resource: None,
+    },
+    custom: None,
+}];
+
+impl Entity for UpdateOnlyDoc {
+    const TABLE: TableDef = TableDef {
+        name: "update_only_docs",
+        columns: UPDATE_ONLY_DOC_COLUMNS,
+        indexes: &[],
+        foreign_keys: &[],
+        rls: UPDATE_ONLY_DOC_RLS,
+    };
+}
+
+#[derive(Debug)]
+struct ResourceDoc;
+
+impl ResourceDoc {
+    const STATUS: Column<String> = Column::new("resource_docs", "status");
+}
+
+const RESOURCE_DOC_COLUMNS: &[ColumnDef] = &[ColumnDef::new("status", SqlType::Text)];
+
+const RESOURCE_DOC_RLS: &[RlsPolicyDef] = &[RlsPolicyDef {
+    operations: &[RlsOperation::Update],
+    kind: RlsPolicyKind::Rbac,
+    column: None,
+    authorization: RlsAuthorizationDef {
+        mode: RlsMatchMode::All,
+        roles: &[],
+        permissions: &["docs:update"],
+        scopes: &[],
+        resource: Some("doc:7"),
+    },
+    custom: None,
+}];
+
+impl Entity for ResourceDoc {
+    const TABLE: TableDef = TableDef {
+        name: "resource_docs",
+        columns: RESOURCE_DOC_COLUMNS,
+        indexes: &[],
+        foreign_keys: &[],
+        rls: RESOURCE_DOC_RLS,
+    };
+}
+
+#[derive(Debug)]
 struct TenantDoc;
 
 impl TenantDoc {
@@ -556,6 +622,72 @@ fn scoped_update_enforces_rbac_per_operation() {
             Value::Text("user_1".into()),
             Value::Integer(7)
         ]
+    );
+}
+
+#[test]
+fn scoped_builders_fail_closed_for_uncovered_operations() {
+    let context = AccessContext::authenticated("user_1").with_permissions(["docs:update"]);
+
+    assert_eq!(
+        UpdateOnlyDoc::select_scoped(&context).unwrap_err(),
+        RlsError::Forbidden {
+            table: "update_only_docs"
+        }
+    );
+    assert_eq!(
+        UpdateOnlyDoc::insert_scoped(&context).unwrap_err(),
+        RlsError::Forbidden {
+            table: "update_only_docs"
+        }
+    );
+    assert_eq!(
+        UpdateOnlyDoc::delete_scoped(&context).unwrap_err(),
+        RlsError::Forbidden {
+            table: "update_only_docs"
+        }
+    );
+    assert!(
+        UpdateOnlyDoc::update_scoped(&context)
+            .unwrap()
+            .set(UpdateOnlyDoc::STATUS, "reviewed")
+            .lint()
+            .contains(&QueryLint::BroadUpdate)
+    );
+}
+
+#[test]
+fn scoped_rbac_requires_matching_resource_when_declared() {
+    assert_eq!(
+        ResourceDoc::update_scoped(
+            &AccessContext::authenticated("user_1").with_permissions(["docs:update"])
+        )
+        .unwrap_err(),
+        RlsError::Forbidden {
+            table: "resource_docs"
+        }
+    );
+    assert_eq!(
+        ResourceDoc::update_scoped(
+            &AccessContext::authenticated("user_1")
+                .with_permissions(["docs:update"])
+                .with_resource("doc:8")
+        )
+        .unwrap_err(),
+        RlsError::Forbidden {
+            table: "resource_docs"
+        }
+    );
+    assert!(
+        ResourceDoc::update_scoped(
+            &AccessContext::authenticated("user_1")
+                .with_permissions(["docs:update"])
+                .with_resource("doc:7")
+        )
+        .unwrap()
+        .set(ResourceDoc::STATUS, "reviewed")
+        .lint()
+        .contains(&QueryLint::BroadUpdate)
     );
 }
 
