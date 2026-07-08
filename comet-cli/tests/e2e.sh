@@ -23,7 +23,8 @@ trap cleanup EXIT
 
 echo "Building comet-cli..."
 cargo build --manifest-path "$CLI_DIR/Cargo.toml" --quiet
-COMET="$CLI_DIR/target/debug/comet"
+TARGET_DIR="$(cargo metadata --manifest-path "$CLI_DIR/Cargo.toml" --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+COMET="$TARGET_DIR/debug/comet"
 
 echo "Scaffolding a fixture project..."
 "$COMET" new fixture --path "$FIXTURE" --db-binding DB >/dev/null
