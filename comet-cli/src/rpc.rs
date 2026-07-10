@@ -342,6 +342,8 @@ pub fn generate_rust_client_with_types(manifest: &RpcManifest, types: &TsTypes) 
          pub enum CometRpcError {{\n\
          \x20   #[error(\"HTTP client error: {{0}}\")] \n\
          \x20   Http(#[from] reqwest::Error),\n\
+         \x20   #[error(\"JSON decode error: {{0}}\")] \n\
+         \x20   Json(#[from] serde_json::Error),\n\
          \x20   #[error(\"Comet RPC request failed with status {{status}}\")]\n\
          \x20   Status {{ status: reqwest::StatusCode, body: String }},\n\
          }}\n\n\
@@ -383,11 +385,17 @@ pub fn generate_rust_client_with_types(manifest: &RpcManifest, types: &TsTypes) 
          \x20       }}\n\
          \x20       let response = request.send().await?;\n\
          \x20       let status = response.status();\n\
+         \x20       let body = response.bytes().await?;\n\
          \x20       if !status.is_success() {{\n\
-         \x20           let body = response.text().await.unwrap_or_default();\n\
-         \x20           return Err(CometRpcError::Status {{ status, body }});\n\
+         \x20           return Err(CometRpcError::Status {{\n\
+         \x20               status,\n\
+         \x20               body: String::from_utf8_lossy(&body).into_owned(),\n\
+         \x20           }});\n\
          \x20       }}\n\
-         \x20       Ok(response.json::<T>().await?)\n\
+         \x20       if body.is_empty() {{\n\
+         \x20           return Ok(serde_json::from_str(\"null\")?);\n\
+         \x20       }}\n\
+         \x20       Ok(serde_json::from_slice::<T>(&body)?)\n\
          \x20   }}\n\
          }}\n\n\
          fn encode_path_value(value: impl ToString) -> String {{\n\
@@ -3193,6 +3201,9 @@ mod tests {
             "pub async fn create_task(&self, new_task: &NewTask) -> Result<Task, CometRpcError>"
         ));
         assert!(rust.contains("self.request(reqwest::Method::POST"));
+        assert!(rust.contains("Json(#[from] serde_json::Error),"));
+        assert!(rust.contains("let body = response.bytes().await?;"));
+        assert!(rust.contains("serde_json::from_str(\"null\")?"));
     }
 
     #[test]

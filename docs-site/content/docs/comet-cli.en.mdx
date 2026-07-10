@@ -4,7 +4,7 @@ description: Full command reference for the comet binary — new, generate, migr
 ---
 
 `comet-cli` is a Rust binary (command `comet`) that lives in `comet-cli/`,
-outside the main workspace — just like `comet-macros`. It does four things:
+outside the main workspace — just like `comet-macros`. It does seven things:
 
 - `comet new` — creates a Comet + Nebula + Cloudflare Worker project.
 - `comet generate entity|route` — adds `#[derive(Entity)]` structs and CRUD
@@ -12,6 +12,9 @@ outside the main workspace — just like `comet-macros`. It does four things:
 - `comet migrate init|generate|status` — drives migration generation from
   the entities' real, compiled metadata.
 - `comet auth init` — adds authentication migrations and optional RBAC.
+- `comet rls status` — inspects Nebula row-level-security coverage.
+- `comet rpc manifest|generate` — inspects Rocket routes and emits typed RPC
+  client code.
 - `comet test unit|integration|perf|all` — runs the project's test/release
   gate.
 
@@ -221,6 +224,32 @@ Read-only report: shows the current schema's table/column counts and, if a
 baseline snapshot exists, either "up to date", the pending SQL statements,
 or the list of blockers. Always exits successfully — it's a report, not a
 gate.
+
+## `comet rpc`
+
+```
+comet rpc manifest [--path <dir>] [--out <file>]
+comet rpc generate --lang <ts|dart|rust> [--path <dir>] [--out <file>]
+```
+
+`manifest` walks the Rocket route functions under `src/` and emits JSON with
+the function name, source file, method, mounted path when it can infer
+`rocket.mount(...)`, path/query parameters, `Json<T>` body/response types,
+auth metadata, support classification, and warnings.
+
+`generate` emits a typed client for the JSON-supported routes. It discovers
+referenced public structs and unit enums under `src/`, generates matching
+client-side type declarations, and omits raw or unsupported routes.
+
+- `--lang ts`: emits a `fetch`-based TypeScript client.
+- `--lang dart`: emits a Dart client using `package:http/http.dart`.
+- `--lang rust`: emits a Rust client using `reqwest`, `serde`,
+  `serde_json`, `thiserror`, and `percent-encoding`.
+
+Authenticated routes are detected from `AuthSession`, `AuthorizedSession<T>`,
+and `#[comet_auth::requires_auth(...)]`. Policy guards can be compiled in a
+temporary crate so their roles, permissions, scopes, resource, and mode are
+included in the manifest.
 
 ## `comet test`
 
