@@ -2,7 +2,8 @@
 
 `comet-cli` (binary name `comet`) scaffolds Comet + Nebula + Cloudflare
 Worker projects, generates entities and CRUD routes, drives Nebula migration
-generation, and orchestrates a project's test/release gate. It lives in this
+generation, inspects routes for typed RPC clients, and orchestrates a
+project's test/release gate. It lives in this
 repo, outside the Cargo workspace (same precedent as `comet-macros`), and
 releases in lockstep with the `comet` crate — a given `comet-cli` version
 always pairs with the `comet` core version it was built and tested against.
@@ -145,6 +146,48 @@ generate` to act on what it shows.
 ```
 comet migrate status [--path <dir>]
 ```
+
+### `comet rpc manifest`
+
+Discovers Rocket route functions under `src/` and emits a machine-readable
+RPC manifest.
+
+```
+comet rpc manifest [--path <dir>] [--out <file>]
+```
+
+The manifest includes each route's function name, module path, source file,
+HTTP method, mounted path when it can be inferred from `rocket.mount(...)`,
+path/query parameters, `Json<T>` request/response types, auth metadata, and
+support classification:
+
+- `json`: typed client generation supports this route.
+- `raw`: route shape is recognized, but it uses non-JSON body/response data.
+- `unsupported`: route is visible, but not currently safe to generate.
+
+Routes guarded by `AuthSession`/`AuthorizedSession<T>` or
+`#[comet_auth::requires_auth(...)]` are marked as authenticated. When a
+project has a `Cargo.toml` and a `comet-auth` dependency, policy guards can
+be compiled in a temporary crate so their roles, permissions, scopes,
+resource, and authorization mode are included in the manifest.
+
+### `comet rpc generate`
+
+Generates a typed client for JSON-supported routes.
+
+```
+comet rpc generate --lang <ts|dart|rust> [--path <dir>] [--out <file>]
+```
+
+The generator walks the same manifest, discovers referenced public structs
+and unit enums under `src/`, and emits client-side type declarations plus a
+`CometClient`. Raw and unsupported routes are intentionally omitted from the
+generated client.
+
+Generated clients expect JSON HTTP endpoints and bearer-token auth when a
+route is authenticated. The Rust client uses `reqwest`, `serde`,
+`serde_json`, `thiserror`, and `percent-encoding`; the Dart client uses
+`package:http/http.dart`; the TypeScript client only relies on `fetch`.
 
 ### `comet test unit` / `integration` / `perf` / `all`
 

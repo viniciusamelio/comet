@@ -1,0 +1,116 @@
+---
+title: Typed RPC
+description: Generate typed TypeScript, Dart, and Rust clients from Rocket routes.
+---
+
+Comet RPC is a `comet-cli` feature that inspects Rocket route functions and
+generates client code for routes with JSON request/response contracts. It does
+not add a new server runtime protocol: your server remains ordinary Rocket,
+and the generated client calls the same HTTP routes.
+
+## Route Shape
+
+RPC generation supports routes whose body and response are represented with
+`rocket::serde::json::Json<T>`:
+
+```rust
+use rocket::serde::json::Json;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct NewTask {
+    pub title: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Task {
+    pub id: i32,
+    pub title: String,
+    pub done: bool,
+}
+
+#[post("/tasks", data = "<new_task>")]
+pub async fn create_task(new_task: Json<NewTask>) -> ApiResult<Json<Task>> {
+    todo!()
+}
+
+#[get("/tasks/<id>")]
+pub async fn get_task(id: i32) -> ApiResult<Json<Task>> {
+    todo!()
+}
+```
+
+The CLI extracts:
+
+- path parameters from route placeholders like `<id>` and `<key..>`;
+- query parameters from route placeholders like `?<done>&<page>`;
+- request bodies from `data = "<name>"` arguments typed as `Json<T>`;
+- responses from `Json<T>`, `Result<Json<T>, E>`, `ApiResult<Json<T>>`, and
+  local `Result` aliases.
+
+## Manifest
+
+Use `manifest` to inspect what the CLI sees before generating code:
+
+```sh
+comet rpc manifest --path . --out rpc-manifest.json
+```
+
+The manifest includes route names, source files, HTTP methods, mounted paths
+when `rocket.mount(...)` can be inferred, path/query params, body/response
+types, auth metadata, support classification, and warnings.
+
+Support classifications are:
+
+- `json`: the route can be included in typed client generation.
+- `raw`: the route is recognized, but uses raw bodies, streams, WebSockets,
+  R2 objects, status responders, or other non-JSON shapes.
+- `unsupported`: the route is visible, but there is not enough JSON contract
+  information to generate a typed call.
+
+## Generate Clients
+
+Generate a client with:
+
+```sh
+comet rpc generate --lang ts --path . --out src/comet-rpc.ts
+comet rpc generate --lang dart --path . --out lib/comet_rpc.dart
+comet rpc generate --lang rust --path . --out src/comet_rpc.rs
+```
+
+Only `json` routes are emitted. Raw and unsupported routes stay out of the
+generated client instead of being exposed with misleading types.
+
+The generated clients use bearer tokens for authenticated routes:
+
+- TypeScript: pass a `TokenProvider` to `new CometClient(baseUrl, tokenProvider)`.
+- Dart: pass `tokenProvider:` to `CometClient`.
+- Rust: call `.with_bearer_token(token)` on `CometClient`.
+
+The server still enforces authentication and authorization. The client only
+sends a bearer token when the manifest marks the route as authenticated.
+
+## Generated Types
+
+The generator discovers referenced public structs and unit enums under `src/`.
+It supports public named fields, `Option<T>`, `Vec<T>`, nested custom types,
+`#[serde(rename = "...")]`, `#[serde(skip)]`, and common
+`#[serde(rename_all = "...")]` enum cases.
+
+For client dependencies:
+
+- TypeScript uses `fetch`.
+- Dart uses `package:http/http.dart`.
+- Rust uses `reqwest`, `serde`, `serde_json`, `thiserror`, and
+  `percent-encoding`.
+
+## Limits
+
+RPC generation is intentionally conservative today:
+
+- request bodies must be `Json<T>`;
+- tuple structs, generic DTO specialization, and enums with payloads are not
+  modeled;
+- type aliases for DTOs are not expanded;
+- streaming, WebSocket, R2, `Status`, and raw byte routes are detected but not
+  generated as typed client methods yet.
+
