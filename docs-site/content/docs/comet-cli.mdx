@@ -5,7 +5,7 @@ description: Referência completa dos comandos do binário comet — new, genera
 
 `comet-cli` é um binário Rust (comando `comet`) que fica em
 `comet-cli/`, fora do workspace principal — assim como `comet-macros`. Ele
-faz quatro coisas:
+faz sete coisas:
 
 - `comet new` — cria um projeto Comet + Nebula + Cloudflare Worker.
 - `comet generate entity|route` — adiciona structs `#[derive(Entity)]` e
@@ -14,6 +14,10 @@ faz quatro coisas:
   partir da metadata real e compilada das entidades.
 - `comet auth init` — adiciona migrations de autenticação e, opcionalmente,
   RBAC.
+- `comet rls status` — inspeciona a cobertura de row-level security das
+  entidades Nebula.
+- `comet rpc manifest|generate` — inspeciona rotas Rocket e emite código de
+  cliente RPC tipado.
 - `comet test unit|integration|perf|all` — roda o gate de testes/release do
   projeto.
 
@@ -222,6 +226,33 @@ Relatório somente leitura: mostra as tabelas/contagens de colunas do schema
 atual e, se houver um snapshot base, "up to date", os statements SQL
 pendentes, ou a lista de bloqueadores. Sempre sai com sucesso — é um
 relatório, não um gate.
+
+## `comet rpc`
+
+```
+comet rpc manifest [--path <dir>] [--out <arquivo>]
+comet rpc generate --lang <ts|dart|rust> [--path <dir>] [--out <arquivo>]
+```
+
+`manifest` percorre as funções de rota Rocket sob `src/` e emite JSON com
+nome da função, arquivo de origem, método, path montado quando consegue
+inferir `rocket.mount(...)`, parâmetros de path/query, tipos `Json<T>` de
+body/resposta, metadata de auth, classificação de suporte e warnings.
+
+`generate` emite um cliente tipado para as rotas com suporte JSON. Ele
+descobre structs públicas e enums unitários referenciados sob `src/`, gera
+as declarações de tipo correspondentes no cliente, e omite rotas raw ou sem
+suporte.
+
+- `--lang ts`: emite um cliente TypeScript baseado em `fetch`.
+- `--lang dart`: emite um cliente Dart usando `package:http/http.dart`.
+- `--lang rust`: emite um cliente Rust usando `reqwest`, `serde`,
+  `serde_json`, `thiserror` e `percent-encoding`.
+
+Rotas autenticadas são detectadas a partir de `AuthSession`,
+`AuthorizedSession<T>` e `#[comet_auth::requires_auth(...)]`. Guards de
+policy podem ser compilados em um crate temporário para incluir roles,
+permissions, scopes, resource e modo no manifesto.
 
 ## `comet test`
 

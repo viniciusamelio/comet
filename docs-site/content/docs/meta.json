@@ -6,6 +6,7 @@
     "cloudflare-adapter",
     "nebula-orm",
     "auth",
+    "rpc",
     "comet-cli",
     "example-walkthrough"
   ]
