@@ -31,6 +31,12 @@ const copy = {
         href: '/pt-BR/docs/nebula-orm',
       },
       {
+        title: 'RPC tipado',
+        description:
+          'Escaneie rotas Rocket com contratos JSON e gere clientes tipados para TypeScript, Dart e Rust, incluindo metadata de autenticação.',
+        href: '/pt-BR/docs/rpc',
+      },
+      {
         title: 'comet-cli',
         description:
           'Crie projetos, gere entidades e rotas CRUD, conduza a geração de migrations e rode o gate de testes/release do seu projeto, tudo a partir de um único binário.',
@@ -61,6 +67,12 @@ const copy = {
         description:
           'A D1-first ORM core: #[derive(Entity)], typed columns, deterministic SQL builders, explicit relationships, and safe migration generation — fully feature-gated and opt-in.',
         href: '/en/docs/nebula-orm',
+      },
+      {
+        title: 'Typed RPC',
+        description:
+          'Scan Rocket routes with JSON contracts and generate typed clients for TypeScript, Dart, and Rust, including auth metadata.',
+        href: '/en/docs/rpc',
       },
       {
         title: 'comet-cli',
@@ -101,7 +113,7 @@ export default async function HomePage({ params }: { params: Promise<Params> }) 
         </div>
       </section>
 
-      <section className="mx-auto grid w-full max-w-5xl gap-6 px-6 py-16 sm:grid-cols-3">
+      <section className="mx-auto grid w-full max-w-6xl gap-6 px-6 py-16 sm:grid-cols-2 lg:grid-cols-4">
         {t.features.map((feature) => (
           <Link
             key={feature.href}
