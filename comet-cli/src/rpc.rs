@@ -493,10 +493,11 @@ fn ts_model_from_struct(item_struct: &syn::ItemStruct) -> Option<TsModel> {
     let Fields::Named(fields) = &item_struct.fields else {
         return None;
     };
+    let rename_all = serde_rename_all(&item_struct.attrs);
 
     let mut model_fields = Vec::new();
     for field in &fields.named {
-        let Some(model_field) = ts_model_field(field) else {
+        let Some(model_field) = ts_model_field(field, rename_all.as_deref()) else {
             continue;
         };
         model_fields.push(model_field);
@@ -508,7 +509,7 @@ fn ts_model_from_struct(item_struct: &syn::ItemStruct) -> Option<TsModel> {
     })
 }
 
-fn ts_model_field(field: &Field) -> Option<TsModelField> {
+fn ts_model_field(field: &Field, rename_all: Option<&str>) -> Option<TsModelField> {
     if !matches!(field.vis, Visibility::Public(_)) {
         return None;
     }
@@ -517,7 +518,7 @@ fn ts_model_field(field: &Field) -> Option<TsModelField> {
     if serde_skip(&field.attrs) {
         return None;
     }
-    let name = serde_rename(&field.attrs).unwrap_or(ident);
+    let name = serde_rename(&field.attrs).unwrap_or_else(|| rename_field(&ident, rename_all));
     let rust_type = type_to_string(&field.ty);
     let optional = generic_inner_for_last_segment(&rust_type, "Option").is_some();
 
@@ -527,6 +528,17 @@ fn ts_model_field(field: &Field) -> Option<TsModelField> {
         ts_type: rust_type_to_typescript(&rust_type),
         optional,
     })
+}
+
+fn rename_field(name: &str, rename_all: Option<&str>) -> String {
+    match rename_all {
+        Some("snake_case") => to_snake_case(name),
+        Some("kebab-case") => to_snake_case(name).replace('_', "-"),
+        Some("SCREAMING_SNAKE_CASE") => to_snake_case(name).to_ascii_uppercase(),
+        Some("camelCase") => to_lower_camel_case(name),
+        Some("PascalCase") => to_pascal_case(name),
+        Some(_) | None => name.to_owned(),
+    }
 }
 
 fn ts_enum_from_enum(item_enum: &syn::ItemEnum) -> Option<TsEnum> {
@@ -862,6 +874,7 @@ fn typescript_type_declarations(routes: &[&RpcRoute], types: &TsTypes) -> Vec<St
     let mut names = typescript_type_names(routes);
     names.extend(types.models.keys().cloned());
     names.extend(types.enums.keys().cloned());
+    names.extend(model_field_type_names(types));
     names
         .into_iter()
         .map(|name| {
@@ -913,6 +926,7 @@ fn dart_type_declarations(routes: &[&RpcRoute], types: &TsTypes) -> Vec<String> 
     let mut names = typescript_type_names(routes);
     names.extend(types.models.keys().cloned());
     names.extend(types.enums.keys().cloned());
+    names.extend(model_field_type_names(types));
     names
         .into_iter()
         .map(|name| {
@@ -1154,6 +1168,7 @@ fn rust_type_declarations(routes: &[&RpcRoute], types: &TsTypes) -> Vec<String> 
     let mut names = typescript_type_names(routes);
     names.extend(types.models.keys().cloned());
     names.extend(types.enums.keys().cloned());
+    names.extend(model_field_type_names(types));
     names
         .into_iter()
         .map(|name| {
@@ -1392,6 +1407,16 @@ fn typescript_type_names(routes: &[&RpcRoute]) -> std::collections::BTreeSet<Str
         }
         if let Some(response) = &route.response {
             collect_custom_type_names(response, &mut names);
+        }
+    }
+    names
+}
+
+fn model_field_type_names(types: &TsTypes) -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for model in types.models.values() {
+        for field in &model.fields {
+            collect_custom_type_names(&field.rust_type, &mut names);
         }
     }
     names
@@ -2879,6 +2904,41 @@ mod tests {
     }
 
     #[test]
+    fn serializes_manifest_with_support_auth_and_query_params() {
+        let manifest = RpcManifest {
+            version: MANIFEST_VERSION,
+            routes: vec![RpcRoute {
+                name: "list_tasks".to_owned(),
+                module_path: vec!["tasks".to_owned(), "routes".to_owned()],
+                source: "src/tasks/routes.rs".to_owned(),
+                method: "GET".to_owned(),
+                path: "/tasks".to_owned(),
+                data_param: None,
+                path_params: Vec::new(),
+                query_params: vec![RpcParam {
+                    name: "done".to_owned(),
+                    rust_type: "bool".to_owned(),
+                    variadic: false,
+                }],
+                body: None,
+                response: Some("Vec < Task >".to_owned()),
+                error: Some("ApiError".to_owned()),
+                auth: RpcAuth::Optional,
+                support: RpcRouteSupport::Json,
+                warnings: Vec::new(),
+            }],
+        };
+
+        let json = serde_json::to_value(&manifest).unwrap();
+
+        assert_eq!(json["version"], MANIFEST_VERSION);
+        assert_eq!(json["routes"][0]["support"], "json");
+        assert_eq!(json["routes"][0]["auth"]["kind"], "optional");
+        assert_eq!(json["routes"][0]["query_params"][0]["name"], "done");
+        assert_eq!(json["routes"][0]["error"], "ApiError");
+    }
+
+    #[test]
     fn resolves_local_result_alias_error_type() {
         let dir = tempfile::tempdir().unwrap();
         write(
@@ -2914,6 +2974,7 @@ mod tests {
             use rocket::serde::json::Json;
 
             #[derive(serde::Serialize)]
+            #[serde(rename_all = "camelCase")]
             pub struct Task {
                 pub id: i32,
                 #[serde(rename = "taskTitle")]
@@ -2948,7 +3009,7 @@ mod tests {
         assert!(ts.contains("  id: number;"));
         assert!(ts.contains("  taskTitle: string;"));
         assert!(ts.contains("  done: boolean;"));
-        assert!(ts.contains("  archived_at?: string | null;"));
+        assert!(ts.contains("  archivedAt?: string | null;"));
         assert!(ts.contains("  status: TaskStatus;"));
         assert!(
             ts.contains(
@@ -2956,6 +3017,43 @@ mod tests {
             )
         );
         assert!(!ts.contains("private_note"));
+    }
+
+    #[test]
+    fn falls_back_when_enum_schema_is_not_unit_only() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "src/tasks/routes.rs",
+            r#"
+            use rocket::serde::json::Json;
+
+            pub struct Task {
+                pub status: TaskStatus,
+            }
+
+            pub enum TaskStatus {
+                Done,
+                Failed(String),
+            }
+
+            #[get("/tasks/<id>")]
+            pub async fn get_task(id: i32) -> Json<Task> {
+                todo!()
+            }
+            "#,
+        );
+
+        let manifest = discover_manifest(dir.path()).unwrap();
+        let types = discover_typescript_types(dir.path(), &manifest).unwrap();
+        let ts = generate_typescript_client_with_types(&manifest, &types);
+        let dart = generate_dart_client_with_types(&manifest, &types);
+        let rust = generate_rust_client_with_types(&manifest, &types);
+
+        assert!(!types.enums.contains_key("TaskStatus"));
+        assert!(ts.contains("export type TaskStatus = unknown;"));
+        assert!(dart.contains("typedef TaskStatus = Object?;"));
+        assert!(rust.contains("pub type TaskStatus = serde_json::Value;"));
     }
 
     #[test]
