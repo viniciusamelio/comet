@@ -240,3 +240,26 @@ pub struct TestArgs {
     #[arg(long)]
     pub path: Option<PathBuf>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rpc_generate_requires_supported_language() {
+        let result = Cli::try_parse_from([
+            "comet",
+            "rpc",
+            "generate",
+            "--lang",
+            "go",
+            "--out",
+            "client.go",
+        ]);
+        let Err(error) = result else {
+            panic!("expected invalid rpc language to fail");
+        };
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+    }
+}
