@@ -85,9 +85,19 @@ export class CometClient {
       body: requestBody,
     });
     const text = await response.text();
-    const payload = text ? JSON.parse(text) : undefined;
+    const payload = parseJsonResponse(text, response.ok);
     if (!response.ok) throw new CometRpcError(response.status, payload);
     return payload as T;
+  }
+}
+
+function parseJsonResponse(text: string, ok: boolean): unknown {
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    if (ok) throw new SyntaxError("Comet RPC response was not valid JSON");
+    return text;
   }
 }
 
