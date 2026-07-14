@@ -89,6 +89,26 @@ The generated clients use bearer tokens for authenticated routes:
 The server still enforces authentication and authorization. The client only
 sends a bearer token when the manifest marks the route as authenticated.
 
+## React Native Example
+
+There is an Expo app at
+[`examples/react-native-rpc`](https://github.com/viniciusamelio/comet/tree/main/examples/react-native-rpc)
+that consumes the TypeScript client generated from
+`examples/cloudflare-worker`.
+
+The client used by the app is produced with:
+
+```sh
+cargo run -p comet-cli -- rpc generate \
+  --lang ts \
+  --path examples/cloudflare-worker \
+  --out examples/react-native-rpc/src/comet-rpc.ts
+```
+
+The example screen lets you configure the API URL, provide a bearer token,
+list tasks with `listTasks()`, create tasks with `createTask()`, and complete
+tasks with `completeTask()`.
+
 ## Generated Types
 
 The generator discovers referenced public structs and unit enums under `src/`.
@@ -113,4 +133,3 @@ RPC generation is intentionally conservative today:
 - type aliases for DTOs are not expanded;
 - streaming, WebSocket, R2, `Status`, and raw byte routes are detected but not
   generated as typed client methods yet.
-

@@ -90,6 +90,26 @@ Os clientes gerados usam bearer token para rotas autenticadas:
 O servidor continua aplicando autenticação e autorização. O cliente só envia
 um bearer token quando o manifesto marca a rota como autenticada.
 
+## Exemplo React Native
+
+Há um app Expo em
+[`examples/react-native-rpc`](https://github.com/viniciusamelio/comet/tree/main/examples/react-native-rpc)
+que consome o cliente TypeScript gerado a partir de
+`examples/cloudflare-worker`.
+
+O cliente usado pelo app é produzido com:
+
+```sh
+cargo run -p comet-cli -- rpc generate \
+  --lang ts \
+  --path examples/cloudflare-worker \
+  --out examples/react-native-rpc/src/comet-rpc.ts
+```
+
+A tela do exemplo permite configurar a URL da API, informar um bearer token,
+listar tarefas com `listTasks()`, criar tarefas com `createTask()` e concluir
+tarefas com `completeTask()`.
+
 ## Tipos gerados
 
 O gerador descobre structs públicas e enums unitários referenciados sob
@@ -114,4 +134,3 @@ A geração RPC é conservadora hoje:
 - aliases de tipo para DTOs não são expandidos;
 - rotas de streaming, WebSocket, R2, `Status` e bytes raw são detectadas, mas
   ainda não são geradas como métodos tipados no cliente.
-
