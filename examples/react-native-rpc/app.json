@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "Comet RPC",
+    "slug": "comet-rpc",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": ["**/*"]
+  }
+}
