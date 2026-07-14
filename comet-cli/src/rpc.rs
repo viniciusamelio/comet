@@ -223,9 +223,18 @@ pub fn generate_typescript_client_with_types(manifest: &RpcManifest, types: &TsT
          \x20     body: requestBody,\n\
          \x20   }});\n\
          \x20   const text = await response.text();\n\
-         \x20   const payload = text ? JSON.parse(text) : undefined;\n\
+         \x20   const payload = parseJsonResponse(text, response.ok);\n\
          \x20   if (!response.ok) throw new CometRpcError(response.status, payload);\n\
          \x20   return payload as T;\n\
+         \x20 }}\n\
+         }}\n\n\
+         function parseJsonResponse(text: string, ok: boolean): unknown {{\n\
+         \x20 if (!text) return undefined;\n\
+         \x20 try {{\n\
+         \x20   return JSON.parse(text);\n\
+         \x20 }} catch {{\n\
+         \x20   if (ok) throw new SyntaxError(\"Comet RPC response was not valid JSON\");\n\
+         \x20   return text;\n\
          \x20 }}\n\
          }}\n\n\
          function encodePathValue(value: string | number | boolean | Array<string | number | boolean>): string {{\n\
@@ -291,11 +300,21 @@ pub fn generate_dart_client_with_types(manifest: &RpcManifest, types: &TsTypes) 
          \x20     ..headers.addAll(headers)\n\
          \x20     ..body = requestBody ?? '');\n\
          \x20   final text = await response.stream.bytesToString();\n\
-         \x20   final payload = text.isEmpty ? null : jsonDecode(text);\n\
-         \x20   if (response.statusCode < 200 || response.statusCode >= 300) {{\n\
+         \x20   final ok = response.statusCode >= 200 && response.statusCode < 300;\n\
+         \x20   final payload = _decodeJsonResponse(text, ok);\n\
+         \x20   if (!ok) {{\n\
          \x20     throw CometRpcException(response.statusCode, payload);\n\
          \x20   }}\n\
          \x20   return decode(payload);\n\
+         \x20 }}\n\
+         }}\n\n\
+         Object? _decodeJsonResponse(String text, bool ok) {{\n\
+         \x20 if (text.isEmpty) return null;\n\
+         \x20 try {{\n\
+         \x20   return jsonDecode(text);\n\
+         \x20 }} on FormatException {{\n\
+         \x20   if (ok) rethrow;\n\
+         \x20   return text;\n\
          \x20 }}\n\
          }}\n\n\
          Object? _toJson(Object? value) {{\n\
@@ -2858,6 +2877,8 @@ mod tests {
         assert!(ts.contains("async getTask(id: number): Promise<Task>"));
         assert!(ts.contains("`/api/tasks/${encodePathValue(id)}`"));
         assert!(ts.contains("this.request<Task>(\"GET\""));
+        assert!(ts.contains("const payload = parseJsonResponse(text, response.ok);"));
+        assert!(ts.contains("if (ok) throw new SyntaxError"));
         assert!(!ts.contains("putAsset"));
     }
 
@@ -3135,6 +3156,8 @@ mod tests {
         assert!(dart.contains("Future<Task> createTask(NewTask new_task) async"));
         assert!(dart.contains("return _request<Task>('POST', '/tasks', new_task, true"));
         assert!(dart.contains("Task.fromJson(value)"));
+        assert!(dart.contains("final payload = _decodeJsonResponse(text, ok);"));
+        assert!(dart.contains("if (ok) rethrow;"));
     }
 
     #[test]
